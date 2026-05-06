@@ -1,0 +1,24 @@
+# GRA-MicroAnalyzer — Runtime Dependencies
+# =========================================
+# Install with:  pip install -r requirements.txt
+#
+# Python >= 3.10 required (uses match/case-compatible type hints,
+# X | Y union syntax in annotations, and tomllib in stdlib).
+
+# --- UI Framework ---
+PySide6>=6.6.0,<7.0.0
+
+# --- Scientific Computing ---
+numpy>=1.26.0,<2.0.0
+pandas>=2.1.0,<3.0.0
+
+# --- Visualisation ---
+matplotlib>=3.8.0,<4.0.0
+
+# --- Data Validation (optional but recommended) ---
+# If pydantic is absent, core/data_model.py falls back to stdlib dataclasses.
+pydantic>=2.5.0,<3.0.0
+
+# --- Excel I/O ---
+openpyxl>=3.1.0,<4.0.0   # .xlsx read/write
+xlrd>=2.0.1,<3.0.0        # legacy .xls read (read-only)
