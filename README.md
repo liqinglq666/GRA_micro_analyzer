@@ -29,41 +29,51 @@
 
 ### 1. 数据预处理：极差归一化
 
-对于序列 $\{x_i(k)\}$，根据指标属性选择归一化策略：
+对于序列 $`\{x_i(k)\}`$，根据指标属性选择归一化策略：
 
 **望大型 (Larger-the-Better, LTB)**
 
-$$x_i^*(k) = \frac{x_i(k) - \min_i x_i(k)}{\max_i x_i(k) - \min_i x_i(k)}$$
+```math
+x_i^*(k) = \frac{x_i(k) - \min_i x_i(k)}{\max_i x_i(k) - \min_i x_i(k)}
+```
 
 **望小型 (Smaller-the-Better, STB)**
 
-$$x_i^*(k) = \frac{\max_i x_i(k) - x_i(k)}{\max_i x_i(k) - \min_i x_i(k)}$$
+```math
+x_i^*(k) = \frac{\max_i x_i(k) - x_i(k)}{\max_i x_i(k) - \min_i x_i(k)}
+```
 
-其中 $x_i^*(k) \in [0, 1]$，$k$ 为样本编号，$i$ 为因素编号。
+其中 $`x_i^*(k) \in [0, 1]`$，$`k`$ 为样本编号，$`i`$ 为因素编号。
 
 ### 2. 绝对差序列
 
-设参考序列为 $x_0^*(k)$，比较序列为 $x_i^*(k)$，则绝对差为：
+设参考序列为 $`x_0^*(k)`$，比较序列为 $`x_i^*(k)`$，则绝对差为：
 
-$$\Delta_i(k) = \left| x_0^*(k) - x_i^*(k) \right|$$
+```math
+\Delta_i(k) = \left| x_0^*(k) - x_i^*(k) \right|
+```
 
 ### 3. 灰色关联系数
 
-$$\xi_i(k) = \frac{\Delta_{\min} + \rho \cdot \Delta_{\max}}{\Delta_i(k) + \rho \cdot \Delta_{\max}}$$
+```math
+\xi_i(k) = \frac{\Delta_{\min} + \rho \cdot \Delta_{\max}}{\Delta_i(k) + \rho \cdot \Delta_{\max}}
+```
 
 | 符号 | 含义 |
 |---|---|
-| $\Delta_{\min} = \min_i \min_k \Delta_i(k)$ | 全局最小绝对差 |
-| $\Delta_{\max} = \max_i \max_k \Delta_i(k)$ | 全局最大绝对差 |
-| $\rho \in (0, 1]$ | 分辨系数（默认 $\rho = 0.5$），用户可调 |
+| $`\Delta_{\min} = \min_i \min_k \Delta_i(k)`$ | 全局最小绝对差 |
+| $`\Delta_{\max} = \max_i \max_k \Delta_i(k)`$ | 全局最大绝对差 |
+| $`\rho \in (0, 1]`$ | 分辨系数（默认 $`\rho = 0.5`$），用户可调 |
 
 ### 4. 灰色关联度（GRG）
 
 对关联系数在样本维度取均值，得到各因素的最终得分：
 
-$$\Gamma_i = \frac{1}{n} \sum_{k=1}^{n} \xi_i(k), \quad \Gamma_i \in (0, 1]$$
+```math
+\Gamma_i = \frac{1}{n} \sum_{k=1}^{n} \xi_i(k), \quad \Gamma_i \in (0, 1]
+```
 
-$\Gamma_i$ 越接近 1，表明第 $i$ 个微观因素与参考序列的关联程度越强，即对宏观性能的影响越显著。
+$`\Gamma_i`$ 越接近 1，表明第 $`i`$ 个微观因素与参考序列的关联程度越强，即对宏观性能的影响越显著。
 
 ---
 
@@ -230,8 +240,8 @@ gra_micro_analyzer/
 
 ```bash
 # Step 1 — 克隆仓库
-git clone https://github.com/your-org/gra-micro-analyzer.git
-cd gra-micro-analyzer
+git clone git@github.com:liqinglq666/GRA_micro_analyzer.git
+cd GRA_micro_analyzer
 
 # Step 2 — 创建隔离虚拟环境（推荐）
 python -m venv .venv
