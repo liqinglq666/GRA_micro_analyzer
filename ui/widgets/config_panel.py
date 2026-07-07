@@ -38,7 +38,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.data_model import GRAConfig, ColumnConfig, Polarity
-from utils.file_io import load_dataframe
+from utils.file_io import load_dataset
 
 logger = logging.getLogger(__name__)
 
@@ -252,7 +252,7 @@ class ConfigPanel(QWidget):
         file_path = Path(file_path_str)
         self.status_message.emit(f"Loading {file_path.name}...")
         try:
-            df = load_dataframe(file_path)
+            df = load_dataset(file_path)
         except Exception as exc:
             QMessageBox.critical(self, "Load Error", f"Failed to load '{file_path.name}':\n\n{exc}")
             self.status_message.emit("File load failed.")

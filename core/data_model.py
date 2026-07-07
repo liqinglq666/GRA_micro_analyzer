@@ -10,14 +10,14 @@ models.  Immutability guarantees that:
 2. Results passed back via Qt signals are safe to inspect from any
    thread without synchronisation primitives.
 
-If Pydantic is not available the module falls back to stdlib dataclasses
-with manual validators, preserving runtime compatibility.
+If Pydantic is not available the module falls back to lightweight stdlib
+classes with manual validators, preserving runtime compatibility.
 """
 
 from __future__ import annotations
 
 import enum
-from typing import Dict, Optional
+from typing import Any, Dict
 
 import pandas as pd
 
@@ -25,7 +25,12 @@ try:
     from pydantic import BaseModel, Field, field_validator, model_validator
     _PYDANTIC_AVAILABLE = True
 except ImportError:  # pragma: no cover
+    BaseModel = object  # type: ignore[assignment]
     _PYDANTIC_AVAILABLE = False
+
+    def Field(default: Any, **_: Any) -> Any:  # type: ignore[no-redef]
+        """Small compatibility shim for the stdlib fallback path."""
+        return default
 
 
 # ---------------------------------------------------------------------------
@@ -111,6 +116,13 @@ class ColumnConfig(BaseModel if _PYDANTIC_AVAILABLE else object):  # type: ignor
 
     if _PYDANTIC_AVAILABLE:
         model_config = {"frozen": True}
+    else:  # pragma: no cover - exercised only when pydantic is absent
+        def __init__(self, name: str, polarity: Polarity | str) -> None:
+            object.__setattr__(self, "name", name)
+            object.__setattr__(self, "polarity", Polarity(polarity))
+
+        def __setattr__(self, name: str, value: object) -> None:
+            raise TypeError(f"{self.__class__.__name__} is immutable")
 
     def __repr__(self) -> str:
         return (
@@ -172,6 +184,41 @@ class GRAConfig(BaseModel if _PYDANTIC_AVAILABLE else object):  # type: ignore[m
                     f"also appear as a comparative column."
                 )
             return self
+    else:  # pragma: no cover - exercised only when pydantic is absent
+        def __init__(
+            self,
+            id_column: str,
+            reference_column: str,
+            reference_polarity: Polarity | str,
+            comparative_columns: Dict[str, ColumnConfig],
+            rho: float = 0.5,
+        ) -> None:
+            if not comparative_columns:
+                raise ValueError("At least one comparative column must be selected.")
+            if reference_column in comparative_columns:
+                raise ValueError(
+                    f"Reference column '{reference_column}' cannot also appear as "
+                    f"a comparative column."
+                )
+            if not 0.01 <= float(rho) <= 1.0:
+                raise ValueError("rho must be between 0.01 and 1.0.")
+
+            coerced_columns = {
+                name: (
+                    cfg
+                    if isinstance(cfg, ColumnConfig)
+                    else ColumnConfig(name=name, polarity=getattr(cfg, "polarity"))
+                )
+                for name, cfg in comparative_columns.items()
+            }
+            object.__setattr__(self, "id_column", id_column)
+            object.__setattr__(self, "reference_column", reference_column)
+            object.__setattr__(self, "reference_polarity", Polarity(reference_polarity))
+            object.__setattr__(self, "comparative_columns", coerced_columns)
+            object.__setattr__(self, "rho", float(rho))
+
+        def __setattr__(self, name: str, value: object) -> None:
+            raise TypeError(f"{self.__class__.__name__} is immutable")
 
     @property
     def comparative_column_names(self) -> list[str]:
@@ -225,6 +272,25 @@ class GRAResult(BaseModel if _PYDANTIC_AVAILABLE else object):  # type: ignore[m
 
     if _PYDANTIC_AVAILABLE:
         model_config = {"frozen": True, "arbitrary_types_allowed": True}
+    else:  # pragma: no cover - exercised only when pydantic is absent
+        def __init__(
+            self,
+            config: GRAConfig,
+            normalised_df: pd.DataFrame,
+            delta_df: pd.DataFrame,
+            coefficient_df: pd.DataFrame,
+            grg_series: pd.Series,
+            ranked_factors: list[str],
+        ) -> None:
+            object.__setattr__(self, "config", config)
+            object.__setattr__(self, "normalised_df", normalised_df)
+            object.__setattr__(self, "delta_df", delta_df)
+            object.__setattr__(self, "coefficient_df", coefficient_df)
+            object.__setattr__(self, "grg_series", grg_series)
+            object.__setattr__(self, "ranked_factors", ranked_factors)
+
+        def __setattr__(self, name: str, value: object) -> None:
+            raise TypeError(f"{self.__class__.__name__} is immutable")
 
     @property
     def top_factor(self) -> str:

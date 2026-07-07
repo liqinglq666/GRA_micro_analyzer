@@ -14,6 +14,7 @@ pandas>=2.1.0,<3.0.0
 
 # --- Visualisation ---
 matplotlib>=3.8.0,<4.0.0
+networkx>=3.0.0,<4.0.0
 
 # --- Data Validation (optional but recommended) ---
 # If pydantic is absent, core/data_model.py falls back to stdlib dataclasses.
