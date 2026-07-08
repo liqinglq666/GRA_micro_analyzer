@@ -116,12 +116,6 @@ class GreyRelationalAnalyzer:
         self._assert_reference_not_constant(subset, config.reference_column)
         effective_config = self._drop_constant_comparative_factors(subset, config)
 
-        if not effective_config.comparative_columns:
-            raise NormalizationError(
-                column_name="comparative factors",
-                constant_value=float("nan"),
-            )
-
         kept_columns = [config.id_column, effective_config.reference_column, *effective_config.comparative_column_names]
         kept_columns = list(dict.fromkeys([c for c in kept_columns if c in subset.columns]))
         subset = subset[kept_columns]
@@ -344,6 +338,12 @@ class GreyRelationalAnalyzer:
             logger.warning(
                 "Dropped constant comparative factor(s) with no discriminatory information: %s",
                 dropped,
+            )
+
+        if not retained:
+            raise NormalizationError(
+                column_name="all comparative factors",
+                constant_value=float("nan"),
             )
 
         if len(retained) == len(config.comparative_columns):
