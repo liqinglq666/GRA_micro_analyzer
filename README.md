@@ -26,7 +26,7 @@
 
 ### 1. 极差归一化
 
-对于序列 \(x_i(k)\)，根据指标属性选择归一化策略。
+对于序列 $x_i(k)$，根据指标属性选择归一化策略。
 
 **望大型 Larger-the-Better, LTB**
 
@@ -52,7 +52,7 @@ x_i^*(k)=\frac{\max x_i(k)-x_i(k)}{\max x_i(k)-\min x_i(k)}
 \xi_i(k)=\frac{\Delta_{\min}+\rho\Delta_{\max}}{\Delta_i(k)+\rho\Delta_{\max}}
 ```
 
-其中 \(\rho\in(0,1]\)，默认 \(\rho=0.5\)。
+其中 $\rho \in (0,1]$，默认 $\rho=0.5$。
 
 ### 4. 灰色关联度 GRG
 
@@ -60,7 +60,7 @@ x_i^*(k)=\frac{\max x_i(k)-x_i(k)}{\max x_i(k)-\min x_i(k)}
 \Gamma_i=\frac{1}{n}\sum_{k=1}^{n}\xi_i(k)
 ```
 
-\(\Gamma_i\) 越接近 1，说明该因素与参考序列的变化趋势越接近，关联程度越强。
+$\Gamma_i$ 越接近 1，说明该因素与参考序列的变化趋势越接近，关联程度越强。
 
 ---
 
