@@ -2,10 +2,7 @@
 """
 GRA-MicroAnalyzer — Core Package
 =================================
-Exposes the primary domain objects and computation engine at the
-package level so that importing code can write:
-
-    from core import GreyRelationalAnalyzer, GRAConfig, GRAResult
+Exposes the primary domain objects and computation engine at the package level.
 """
 
 from core.exceptions import (
@@ -14,6 +11,7 @@ from core.exceptions import (
     InsufficientDataError,
     ColumnNotFoundError,
     PolarityConfigError,
+    DuplicateColumnError,
     NormalizationError,
     ComputationError,
 )
@@ -21,19 +19,17 @@ from core.data_model import Polarity, ColumnConfig, GRAConfig, GRAResult
 from core.gra_engine import GreyRelationalAnalyzer
 
 __all__: list[str] = [
-    # Exceptions
     "GRABaseException",
     "DataLoadError",
     "InsufficientDataError",
     "ColumnNotFoundError",
     "PolarityConfigError",
+    "DuplicateColumnError",
     "NormalizationError",
     "ComputationError",
-    # Data models
     "Polarity",
     "ColumnConfig",
     "GRAConfig",
     "GRAResult",
-    # Engine
     "GreyRelationalAnalyzer",
 ]
