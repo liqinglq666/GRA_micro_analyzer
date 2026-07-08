@@ -2,10 +2,6 @@
 # ui/main_window.py
 """
 GRA-MicroAnalyzer — Main Application Window
-
-All four charts (Bar, Heatmap, Network, Radar) are drawn on the main thread
-inside _on_result_received, immediately after the worker emits GRAResult.
-No Figure objects are passed across threads.
 """
 
 from __future__ import annotations
@@ -49,13 +45,14 @@ from utils.plot_styler import (
 
 logger = logging.getLogger(__name__)
 
-_PREVIEW_ROW_LIMIT: int = 1_000
-_WINDOW_TITLE: str = (
-    "GRA-MicroAnalyzer \u2014 Grey Relational Analysis for Microstructural Attribution"
-)
-_MIN_WIDTH: int = 1400
-_MIN_HEIGHT: int = 800
-_LEFT_PANEL_MAX_WIDTH: int = 320
+_PREVIEW_ROW_LIMIT = 1_000
+_WINDOW_TITLE = "GRA-MicroAnalyzer — Grey Relational Analysis for Microstructural Attribution"
+_MIN_WIDTH = 1400
+_MIN_HEIGHT = 800
+_LEFT_PANEL_MAX_WIDTH = 320
+_HEATMAP_MAX_ANNOTATED_CELLS = 2_000
+_NETWORK_MAX_FACTORS = 40
+_RADAR_MAX_SAMPLES = 8
 
 
 # ---------------------------------------------------------------------------
@@ -64,18 +61,11 @@ _LEFT_PANEL_MAX_WIDTH: int = 320
 
 
 class _PandasTableModel(QAbstractTableModel):
-    """
-    Minimal read-only QAbstractTableModel adapter for a Pandas DataFrame.
-    Displays up to _PREVIEW_ROW_LIMIT rows.
-    """
+    """Minimal read-only QAbstractTableModel adapter for a Pandas DataFrame."""
 
-    def __init__(
-        self,
-        dataframe: pd.DataFrame,
-        parent: Optional[QWidget] = None,
-    ) -> None:
+    def __init__(self, dataframe: pd.DataFrame, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
-        self._df: pd.DataFrame = dataframe.head(_PREVIEW_ROW_LIMIT).reset_index(drop=False)
+        self._df = dataframe.head(_PREVIEW_ROW_LIMIT).reset_index(drop=False)
 
     def rowCount(self, parent: QModelIndex | QPersistentModelIndex = QModelIndex()) -> int:
         return len(self._df)
@@ -83,11 +73,7 @@ class _PandasTableModel(QAbstractTableModel):
     def columnCount(self, parent: QModelIndex | QPersistentModelIndex = QModelIndex()) -> int:
         return len(self._df.columns)
 
-    def data(
-        self,
-        index: QModelIndex | QPersistentModelIndex,
-        role: int = Qt.ItemDataRole.DisplayRole,
-    ) -> object:
+    def data(self, index: QModelIndex | QPersistentModelIndex, role: int = Qt.ItemDataRole.DisplayRole) -> object:
         if not index.isValid():
             return None
         if role == Qt.ItemDataRole.DisplayRole:
@@ -101,12 +87,7 @@ class _PandasTableModel(QAbstractTableModel):
                 return int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         return None
 
-    def headerData(
-        self,
-        section: int,
-        orientation: Qt.Orientation,
-        role: int = Qt.ItemDataRole.DisplayRole,
-    ) -> object:
+    def headerData(self, section: int, orientation: Qt.Orientation, role: int = Qt.ItemDataRole.DisplayRole) -> object:
         if role != Qt.ItemDataRole.DisplayRole:
             return None
         if orientation == Qt.Orientation.Horizontal:
@@ -128,18 +109,9 @@ class MainWindow(QMainWindow):
         self._dataframe: Optional[pd.DataFrame] = None
         self._last_result: Optional[GRAResult] = None
         self._worker: Optional[GRAWorker] = None
-        self._worker_running: bool = False
-        self._run_timer: QElapsedTimer = QElapsedTimer()
-
-        # Export button references (populated by _build_export_bar)
-        self._btn_export_excel: QPushButton
-        self._btn_export_excel_heatmap_tab: QPushButton
-        self._btn_export_excel_network_tab: QPushButton
-        self._btn_export_excel_radar_tab: QPushButton
-        self._btn_save_grg_fig: QPushButton
-        self._btn_save_heatmap_fig: QPushButton
-        self._btn_save_network_fig: QPushButton
-        self._btn_save_radar_fig: QPushButton
+        self._worker_running = False
+        self._analysis_failed = False
+        self._run_timer = QElapsedTimer()
 
         self._setup_window()
         self._setup_menu_bar()
@@ -150,7 +122,7 @@ class MainWindow(QMainWindow):
         logger.info("MainWindow initialised.")
 
     # ------------------------------------------------------------------
-    # Window-level Setup
+    # Setup
     # ------------------------------------------------------------------
 
     def _setup_window(self) -> None:
@@ -160,15 +132,14 @@ class MainWindow(QMainWindow):
 
     def _setup_menu_bar(self) -> None:
         menu_bar = self.menuBar()
-
         file_menu = menu_bar.addMenu("&File")
 
-        action_load = QAction("&Load Dataset\u2026", self)
+        action_load = QAction("&Load Dataset…", self)
         action_load.setShortcut("Ctrl+O")
         action_load.setStatusTip("Open a CSV or Excel data file.")
         action_load.triggered.connect(self._action_load_dataset)
 
-        self._action_save = QAction("&Save Results\u2026", self)
+        self._action_save = QAction("&Save Results…", self)
         self._action_save.setShortcut("Ctrl+S")
         self._action_save.setStatusTip("Export GRA results to an Excel workbook.")
         self._action_save.setEnabled(False)
@@ -199,23 +170,11 @@ class MainWindow(QMainWindow):
 
         self._tabs = QTabWidget()
         self._tabs.setDocumentMode(True)
-        self._tabs.setStyleSheet(
-            "QTabBar::tab {"
-            "  padding: 6px 16px; min-width: 110px; font-size: 9pt;"
-            "  border-bottom: 3px solid transparent;"
-            "}"
-            "QTabBar::tab:selected {"
-            "  border-bottom: 3px solid #2171B5; font-weight: bold; color: #2171B5;"
-            "}"
-            "QTabBar::tab:hover:!selected {"
-            "  border-bottom: 3px solid #93C4E8;"
-            "}"
-        )
-        self._tabs.addTab(self._build_preview_tab(),  "[1] Data Preview")
-        self._tabs.addTab(self._build_results_tab(),  "[2] GRG Results")
-        self._tabs.addTab(self._build_heatmap_tab(),  "[3] Coefficient Heatmap")
-        self._tabs.addTab(self._build_network_tab(),  "[4] Network Diagram")
-        self._tabs.addTab(self._build_radar_tab(),    "[5] Radar Chart")
+        self._tabs.addTab(self._build_preview_tab(), "[1] Data Preview")
+        self._tabs.addTab(self._build_results_tab(), "[2] GRG Results")
+        self._tabs.addTab(self._build_heatmap_tab(), "[3] Coefficient Heatmap")
+        self._tabs.addTab(self._build_network_tab(), "[4] Network Diagram")
+        self._tabs.addTab(self._build_radar_tab(), "[5] Radar Chart")
 
         splitter.addWidget(self._tabs)
         splitter.setStretchFactor(0, 0)
@@ -236,7 +195,7 @@ class MainWindow(QMainWindow):
         self._progress_bar.setTextVisible(True)
         self._progress_bar.setFormat("%p%")
         self._status_bar.addPermanentWidget(self._progress_bar)
-        self._status_bar.showMessage("Ready \u2014 load a dataset to begin.")
+        self._status_bar.showMessage("Ready — load a dataset to begin.")
 
     # ------------------------------------------------------------------
     # Tab Builders
@@ -250,47 +209,27 @@ class MainWindow(QMainWindow):
 
         toolbar = QToolBar("Preview Actions")
         toolbar.setMovable(False)
-        toolbar.setStyleSheet(
-            "QToolBar {"
-            "  border: none; background: #F8F9FA;"
-            "  border-bottom: 1px solid #DEE2E6; padding: 3px 6px;"
-            "}"
-        )
         action_copy_sel = QAction("Copy Selection", self)
         action_copy_sel.setShortcut(QKeySequence.StandardKey.Copy)
-        action_copy_sel.setToolTip(
-            "Copy highlighted cells to clipboard as tab-separated text  [Ctrl+C]"
-        )
         action_copy_sel.triggered.connect(self._copy_selection_to_clipboard)
         toolbar.addAction(action_copy_sel)
 
-        toolbar.addSeparator()
-
         action_copy_all = QAction("Copy All", self)
         action_copy_all.setShortcut(QKeySequence("Ctrl+Shift+C"))
-        action_copy_all.setToolTip(
-            "Copy the entire visible table to clipboard  [Ctrl+Shift+C]"
-        )
         action_copy_all.triggered.connect(self._copy_all_to_clipboard)
         toolbar.addAction(action_copy_all)
         layout.addWidget(toolbar)
 
         self._preview_notice = QLabel()
-        self._preview_notice.setStyleSheet(
-            "background: #FFF3CD; color: #856404; padding: 4px; font-size: 8pt;"
-        )
+        self._preview_notice.setStyleSheet("background: #FFF3CD; color: #856404; padding: 4px; font-size: 8pt;")
         self._preview_notice.setVisible(False)
         layout.addWidget(self._preview_notice)
 
         self._table_view_widget = QTableView()
         self._table_view_widget.setAlternatingRowColors(True)
         self._table_view_widget.horizontalHeader().setStretchLastSection(True)
-        self._table_view_widget.setSelectionMode(
-            QTableView.SelectionMode.ExtendedSelection  # type: ignore[attr-defined]
-        )
-        self._table_view_widget.setEditTriggers(
-            QTableView.EditTrigger.NoEditTriggers  # type: ignore[attr-defined]
-        )
+        self._table_view_widget.setSelectionMode(QTableView.SelectionMode.ExtendedSelection)  # type: ignore[attr-defined]
+        self._table_view_widget.setEditTriggers(QTableView.EditTrigger.NoEditTriggers)  # type: ignore[attr-defined]
         layout.addWidget(self._table_view_widget)
         return container
 
@@ -337,76 +276,42 @@ class MainWindow(QMainWindow):
 
     def _build_export_bar(self, tab: str) -> QWidget:
         bar = QWidget()
-        bar.setStyleSheet(
-            "QWidget { background: #F0F4F8; border-top: 1px solid #CDD5DF; }"
-            "QPushButton { padding: 4px 12px; }"
-        )
         bar.setFixedHeight(34)
         h_layout = QHBoxLayout(bar)
         h_layout.setContentsMargins(8, 2, 8, 2)
         h_layout.setSpacing(8)
 
-        export_label = QLabel("Export:")
-        export_label.setStyleSheet(
-            "color: #495057; font-weight: bold; font-size: 8pt; border: none;"
-        )
-        h_layout.addWidget(export_label)
+        h_layout.addWidget(QLabel("Export:"))
 
         btn_excel = QPushButton("Results to Excel (.xlsx)")
-        btn_excel.setToolTip(
-            "Export GRG Summary, Normalised, \u0394 Delta, and \u03be Coefficient "
-            "matrices to a multi-sheet Excel workbook."
-        )
         btn_excel.setEnabled(False)
         btn_excel.setFixedHeight(26)
         btn_excel.clicked.connect(self._action_save_results)
         h_layout.addWidget(btn_excel)
 
         if tab == "heatmap":
-            btn_fig = QPushButton("Save Heatmap (SVG / PDF)")
-            btn_fig.setToolTip("Export heatmap as a vector graphic.")
-            btn_fig.setEnabled(False)
-            btn_fig.setFixedHeight(26)
-            btn_fig.clicked.connect(
-                lambda: self._plot_canvas_heatmap.prompt_save_figure(self)
-            )
+            btn_fig = QPushButton("Save Heatmap (SVG / PDF / PNG)")
+            btn_fig.clicked.connect(lambda: self._plot_canvas_heatmap.prompt_save_figure(self))
             self._btn_save_heatmap_fig = btn_fig
             self._btn_export_excel_heatmap_tab = btn_excel
-
         elif tab == "network":
-            btn_fig = QPushButton("Save Network (SVG / PDF)")
-            btn_fig.setToolTip("Export network diagram as a vector graphic.")
-            btn_fig.setEnabled(False)
-            btn_fig.setFixedHeight(26)
-            btn_fig.clicked.connect(
-                lambda: self._plot_canvas_network.prompt_save_figure(self)
-            )
+            btn_fig = QPushButton("Save Network (SVG / PDF / PNG)")
+            btn_fig.clicked.connect(lambda: self._plot_canvas_network.prompt_save_figure(self))
             self._btn_save_network_fig = btn_fig
             self._btn_export_excel_network_tab = btn_excel
-
         elif tab == "radar":
             btn_fig = QPushButton("Save Radar (SVG / PNG)")
-            btn_fig.setToolTip("Export radar chart as SVG or PNG.")
-            btn_fig.setEnabled(False)
-            btn_fig.setFixedHeight(26)
-            # ✅ 直接调用 RadarWidget.prompt_save_figure — 不经过任何中间方法
-            btn_fig.clicked.connect(
-                lambda: self._radar_widget.prompt_save_figure(self)
-            )
+            btn_fig.clicked.connect(lambda: self._radar_widget.prompt_save_figure(self))
             self._btn_save_radar_fig = btn_fig
             self._btn_export_excel_radar_tab = btn_excel
-
-        else:  # bar
-            btn_fig = QPushButton("Save Chart (SVG / PDF)")
-            btn_fig.setToolTip("Export GRG bar chart as a vector graphic.")
-            btn_fig.setEnabled(False)
-            btn_fig.setFixedHeight(26)
-            btn_fig.clicked.connect(
-                lambda: self._plot_canvas_grg.prompt_save_figure(self)
-            )
+        else:
+            btn_fig = QPushButton("Save Chart (SVG / PDF / PNG)")
+            btn_fig.clicked.connect(lambda: self._plot_canvas_grg.prompt_save_figure(self))
             self._btn_save_grg_fig = btn_fig
             self._btn_export_excel = btn_excel
 
+        btn_fig.setEnabled(False)
+        btn_fig.setFixedHeight(26)
         h_layout.addWidget(btn_fig)
         h_layout.addStretch()
         return bar
@@ -427,8 +332,10 @@ class MainWindow(QMainWindow):
     def _on_dataset_loaded(self, dataframe: pd.DataFrame, file_path: Path) -> None:
         self._dataframe = dataframe
         self._last_result = None
+        self._analysis_failed = False
         self._action_save.setEnabled(False)
         self._set_export_buttons_enabled(False)
+        self._clear_result_views()
 
         model = _PandasTableModel(dataframe)
         self._table_view_widget.setModel(model)
@@ -436,27 +343,19 @@ class MainWindow(QMainWindow):
 
         if len(dataframe) > _PREVIEW_ROW_LIMIT:
             self._preview_notice.setText(
-                f"\u26a0  Preview capped at {_PREVIEW_ROW_LIMIT:,} rows.  "
-                f"Full dataset ({len(dataframe):,} rows) is used for analysis."
+                f"⚠ Preview capped at {_PREVIEW_ROW_LIMIT:,} rows. Full dataset ({len(dataframe):,} rows) is used for analysis."
             )
             self._preview_notice.setVisible(True)
         else:
             self._preview_notice.setVisible(False)
 
         self._tabs.setCurrentIndex(0)
-        self.setWindowTitle(f"{file_path.name} \u2014 GRA-MicroAnalyzer")
-        logger.info(
-            "Data preview updated — %d rows shown.",
-            min(len(dataframe), _PREVIEW_ROW_LIMIT),
-        )
+        self.setWindowTitle(f"{file_path.name} — GRA-MicroAnalyzer")
+        logger.info("Data preview updated — %d rows shown.", min(len(dataframe), _PREVIEW_ROW_LIMIT))
 
     def _on_run_requested(self, config: GRAConfig) -> None:
         if self._worker_running:
-            QMessageBox.warning(
-                self,
-                "Analysis in Progress",
-                "An analysis is already running. Please wait for it to complete.",
-            )
+            QMessageBox.warning(self, "Analysis in Progress", "An analysis is already running.")
             return
         if self._dataframe is None:
             QMessageBox.critical(self, "No Data", "Load a dataset before running.")
@@ -477,98 +376,124 @@ class MainWindow(QMainWindow):
         self._worker.finished.connect(self._worker.deleteLater)
 
         self._worker_running = True
+        self._analysis_failed = False
         self._run_timer.start()
         self._config_panel.set_running_state(True)
         self._progress_bar.setVisible(True)
         self._progress_bar.setValue(0)
+        self._clear_result_views()
         self._worker.start()
         logger.info("GRAWorker thread started.")
 
     def _on_result_received(self, result: GRAResult) -> None:
-        """
-        Called on the main thread when GRAWorker emits result_signal.
-        All four charts are built here — no Figure is ever passed across threads.
-        """
+        """Called on the main thread when GRAWorker emits result_signal."""
         self._last_result = result
+        self._analysis_failed = False
         self._action_save.setEnabled(True)
         self._set_export_buttons_enabled(True)
 
-        ref_col   = result.config.reference_column
+        ref_col = result.config.reference_column
         comp_cols = list(result.config.comparative_columns.keys())
-        grg_dict: dict[str, float] = result.grg_series.to_dict()
+        grg_dict = result.grg_series.to_dict()
 
-        # --- [2] GRG Bar Chart ---
-        try:
-            bar_fig = build_grg_bar_chart(
-                grg_series=result.grg_series,
-                title=f"Grey Relational Grade \u2014 Reference: {ref_col}",
-            )
-            self._plot_canvas_grg.display_figure(bar_fig)
-        except Exception as exc:
-            logger.exception("Bar chart failed: %s", exc)
+        self._render_grg_chart(result, ref_col)
+        self._render_heatmap(result, ref_col)
+        self._render_network(result, ref_col, grg_dict)
+        self._render_radar(result, ref_col, comp_cols)
 
-        # --- [3] Coefficient Heatmap ---
-        try:
-            heatmap_fig = build_coefficient_heatmap(
-                coefficient_df=result.coefficient_df,
-                title=f"Relational Coefficient Matrix \u2014 Reference: {ref_col}",
-            )
-            self._plot_canvas_heatmap.display_figure(heatmap_fig)
-        except Exception as exc:
-            logger.exception("Heatmap failed: %s", exc)
-
-        # --- [4] Network Diagram ---
-        try:
-            network_fig = plot_network_diagram(
-                target_name=ref_col,
-                grg_scores=grg_dict,
-                title=f"Topology Network \u2014 Reference: {ref_col}",
-            )
-            self._plot_canvas_network.display_figure(network_fig)
-        except Exception as exc:
-            logger.exception("Network diagram failed: %s", exc)
-
-        # --- [5] Radar Chart — pure QPainter, zero matplotlib polar involvement ---
-        try:
-            norm_df    = result.normalised_df
-            id_col     = result.config.id_column
-            if id_col in norm_df.columns:
-                sample_ids = norm_df[id_col].astype(str).tolist()
-            else:
-                sample_ids = [str(i) for i in norm_df.index]
-
-            available_comp = [c for c in comp_cols if c in norm_df.columns]
-            data_dict: dict[str, list[float]] = {
-                sid: norm_df.iloc[idx][available_comp].tolist()
-                for idx, sid in enumerate(sample_ids)
-            }
-            self._radar_widget.plot(
-                categories=available_comp,
-                data_dict=data_dict,
-                title=f"Radar Chart \u2014 Reference: {ref_col}",
-            )
-        except Exception as exc:
-            logger.exception("Radar chart failed: %s", exc)
-
-        # Switch to GRG Results tab
         self._tabs.setCurrentIndex(1)
         logger.info(
-            "All charts rendered — top factor: '%s' (GRG=%.4f).",
+            "Charts rendered — top factor: '%s' (GRG=%.4f).",
             result.top_factor,
             result.grg_series[result.top_factor],
         )
 
+    def _render_grg_chart(self, result: GRAResult, ref_col: str) -> None:
+        try:
+            bar_fig = build_grg_bar_chart(
+                grg_series=result.grg_series,
+                title=f"Grey Relational Grade — Reference: {ref_col}",
+            )
+            self._plot_canvas_grg.display_figure(bar_fig)
+            self._btn_save_grg_fig.setEnabled(True)
+        except Exception as exc:  # noqa: BLE001
+            self._plot_canvas_grg.clear(f"Bar chart failed:\n{exc}")
+            self._btn_save_grg_fig.setEnabled(False)
+            logger.exception("Bar chart failed: %s", exc)
+
+    def _render_heatmap(self, result: GRAResult, ref_col: str) -> None:
+        n_rows, n_cols = result.coefficient_df.shape
+        n_cells = n_rows * n_cols
+        if n_cells > _HEATMAP_MAX_ANNOTATED_CELLS:
+            self._plot_canvas_heatmap.clear(
+                f"Heatmap skipped for responsiveness.\n"
+                f"Matrix size: {n_rows:,} × {n_cols:,} = {n_cells:,} cells.\n"
+                "Use Excel export to inspect the full coefficient matrix."
+            )
+            self._btn_save_heatmap_fig.setEnabled(False)
+            logger.warning("Heatmap skipped: %d cells exceeds limit %d.", n_cells, _HEATMAP_MAX_ANNOTATED_CELLS)
+            return
+        try:
+            heatmap_fig = build_coefficient_heatmap(
+                coefficient_df=result.coefficient_df,
+                title=f"Relational Coefficient Matrix — Reference: {ref_col}",
+            )
+            self._plot_canvas_heatmap.display_figure(heatmap_fig)
+            self._btn_save_heatmap_fig.setEnabled(True)
+        except Exception as exc:  # noqa: BLE001
+            self._plot_canvas_heatmap.clear(f"Heatmap failed:\n{exc}")
+            self._btn_save_heatmap_fig.setEnabled(False)
+            logger.exception("Heatmap failed: %s", exc)
+
+    def _render_network(self, result: GRAResult, ref_col: str, grg_dict: dict[str, float]) -> None:
+        if len(grg_dict) > _NETWORK_MAX_FACTORS:
+            top_scores = result.grg_series.sort_values(ascending=False).head(_NETWORK_MAX_FACTORS).to_dict()
+            self._status_bar.showMessage(
+                f"Network diagram limited to top {_NETWORK_MAX_FACTORS} factors for readability."
+            )
+        else:
+            top_scores = grg_dict
+        try:
+            network_fig = plot_network_diagram(
+                target_name=ref_col,
+                grg_scores=top_scores,
+                title=f"Topology Network — Reference: {ref_col}",
+            )
+            self._plot_canvas_network.display_figure(network_fig)
+            self._btn_save_network_fig.setEnabled(True)
+        except Exception as exc:  # noqa: BLE001
+            self._plot_canvas_network.clear(f"Network diagram failed:\n{exc}")
+            self._btn_save_network_fig.setEnabled(False)
+            logger.exception("Network diagram failed: %s", exc)
+
+    def _render_radar(self, result: GRAResult, ref_col: str, comp_cols: list[str]) -> None:
+        try:
+            norm_df = result.normalised_df
+            available_comp = [c for c in comp_cols if c in norm_df.columns]
+            sample_df = norm_df.head(_RADAR_MAX_SAMPLES)
+            sample_ids = [str(i) for i in sample_df.index]
+            data_dict = {
+                sid: sample_df.iloc[idx][available_comp].astype(float).tolist()
+                for idx, sid in enumerate(sample_ids)
+            }
+            title = f"Radar Chart — Reference: {ref_col}"
+            if len(norm_df) > _RADAR_MAX_SAMPLES:
+                title += f" (first {_RADAR_MAX_SAMPLES} samples)"
+            self._radar_widget.plot(categories=available_comp, data_dict=data_dict, title=title)
+            self._btn_save_radar_fig.setEnabled(True)
+        except Exception as exc:  # noqa: BLE001
+            self._radar_widget.clear()
+            self._btn_save_radar_fig.setEnabled(False)
+            logger.exception("Radar chart failed: %s", exc)
+
     def _on_worker_error(self, message: str) -> None:
+        self._analysis_failed = True
         QMessageBox.critical(self, "Analysis Error", message)
-        self._status_bar.showMessage("Analysis failed \u2014 see error dialog.")
+        self._status_bar.showMessage("Analysis failed — see error dialog.")
         logger.warning("Worker error: %s", message)
 
-    def _on_heatmap_cell_hovered(
-        self, row_label: str, col_label: str, value: float
-    ) -> None:
-        self._status_bar.showMessage(
-            f"Sample: {row_label}  \u2502  Factor: {col_label}  \u2502  \u03be = {value:.4f}"
-        )
+    def _on_heatmap_cell_hovered(self, row_label: str, col_label: str, value: float) -> None:
+        self._status_bar.showMessage(f"Sample: {row_label} │ Factor: {col_label} │ ξ = {value:.4f}")
 
     def _on_worker_finished(self) -> None:
         elapsed_ms = self._run_timer.elapsed() if self._run_timer.isValid() else 0
@@ -577,9 +502,10 @@ class MainWindow(QMainWindow):
         self._worker = None
         self._config_panel.set_running_state(False)
         self._progress_bar.setVisible(False)
-        self._status_bar.showMessage(
-            f"Analysis complete \u2014 elapsed: {elapsed_str}.  Results ready for export."
-        )
+        if self._analysis_failed:
+            self._status_bar.showMessage(f"Analysis failed — elapsed: {elapsed_str}.")
+        else:
+            self._status_bar.showMessage(f"Analysis complete — elapsed: {elapsed_str}. Results ready for export.")
         logger.debug("GRAWorker thread finished — elapsed %s.", elapsed_str)
 
     # ------------------------------------------------------------------
@@ -589,49 +515,40 @@ class MainWindow(QMainWindow):
     def _copy_selection_to_clipboard(self) -> None:
         model = self._table_view_widget.model()
         if model is None:
-            self._status_bar.showMessage("No data loaded \u2014 nothing to copy.")
+            self._status_bar.showMessage("No data loaded — nothing to copy.")
             return
-        selection = self._table_view_widget.selectionModel().selectedIndexes()
+        selection_model = self._table_view_widget.selectionModel()
+        if selection_model is None:
+            return
+        selection = selection_model.selectedIndexes()
         if not selection:
-            self._status_bar.showMessage(
-                "No cells selected \u2014 use Ctrl+Shift+C to copy the entire table."
-            )
+            self._status_bar.showMessage("No cells selected — use Ctrl+Shift+C to copy the entire table.")
             return
-        cells: dict[tuple[int, int], str] = {}
-        for index in selection:
-            cells[(index.row(), index.column())] = str(
-                model.data(index, Qt.ItemDataRole.DisplayRole) or ""
-            )
+        cells = {
+            (index.row(), index.column()): str(model.data(index, Qt.ItemDataRole.DisplayRole) or "")
+            for index in selection
+        }
         selected_rows = sorted({r for r, _ in cells})
         selected_cols = sorted({c for _, c in cells})
         headers = [
-            str(
-                model.headerData(col, Qt.Orientation.Horizontal, Qt.ItemDataRole.DisplayRole)
-                or ""
-            )
+            str(model.headerData(col, Qt.Orientation.Horizontal, Qt.ItemDataRole.DisplayRole) or "")
             for col in selected_cols
         ]
         lines = ["\t".join(headers)]
         for row in selected_rows:
             lines.append("\t".join(cells.get((row, col), "") for col in selected_cols))
         QApplication.clipboard().setText("\n".join(lines))
-        self._status_bar.showMessage(
-            f"Copied {len(cells)} cell(s) across {len(selected_rows)} row(s) to clipboard."
-        )
-        logger.debug("Selection clipboard copy — %d cells.", len(cells))
+        self._status_bar.showMessage(f"Copied {len(cells)} cell(s) to clipboard.")
 
     def _copy_all_to_clipboard(self) -> None:
         model = self._table_view_widget.model()
         if model is None:
-            self._status_bar.showMessage("No data loaded \u2014 nothing to copy.")
+            self._status_bar.showMessage("No data loaded — nothing to copy.")
             return
         n_rows = model.rowCount()
         n_cols = model.columnCount()
         headers = [
-            str(
-                model.headerData(col, Qt.Orientation.Horizontal, Qt.ItemDataRole.DisplayRole)
-                or ""
-            )
+            str(model.headerData(col, Qt.Orientation.Horizontal, Qt.ItemDataRole.DisplayRole) or "")
             for col in range(n_cols)
         ]
         lines = ["\t".join(headers)]
@@ -641,10 +558,7 @@ class MainWindow(QMainWindow):
                 for col in range(n_cols)
             ))
         QApplication.clipboard().setText("\n".join(lines))
-        self._status_bar.showMessage(
-            f"Entire preview copied \u2014 {n_rows} rows \u00d7 {n_cols} columns."
-        )
-        logger.debug("Full table clipboard copy — %d x %d.", n_rows, n_cols)
+        self._status_bar.showMessage(f"Entire preview copied — {n_rows} rows × {n_cols} columns.")
 
     # ------------------------------------------------------------------
     # Export Button State
@@ -660,6 +574,12 @@ class MainWindow(QMainWindow):
         self._btn_save_network_fig.setEnabled(enabled)
         self._btn_save_radar_fig.setEnabled(enabled)
 
+    def _clear_result_views(self) -> None:
+        self._plot_canvas_grg.clear()
+        self._plot_canvas_heatmap.clear()
+        self._plot_canvas_network.clear()
+        self._radar_widget.clear()
+
     # ------------------------------------------------------------------
     # Menu Action Handlers
     # ------------------------------------------------------------------
@@ -669,23 +589,18 @@ class MainWindow(QMainWindow):
 
     def _action_save_results(self) -> None:
         if self._last_result is None:
-            QMessageBox.information(
-                self, "No Results", "Run an analysis before exporting results."
-            )
+            QMessageBox.information(self, "No Results", "Run an analysis before exporting results.")
             return
         file_path_str, _ = QFileDialog.getSaveFileName(
             self,
             "Export Results to Excel",
-            "gra_results",
-            "Excel Workbook (*.xlsx);;All Files (*)",
+            "gra_results.xlsx",
+            "Excel Workbook (*.xlsx)",
         )
         if not file_path_str:
             return
         try:
-            saved_path = save_results_to_excel(
-                result=self._last_result,
-                output_path=file_path_str,
-            )
+            saved_path = save_results_to_excel(result=self._last_result, output_path=file_path_str)
             QMessageBox.information(
                 self,
                 "Export Successful",
@@ -698,7 +613,7 @@ class MainWindow(QMainWindow):
                 "  5. Analysis Config",
             )
             self._status_bar.showMessage(f"Results saved: {saved_path.name}")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             QMessageBox.critical(self, "Export Failed", f"Could not save results:\n{exc}")
             logger.exception("Excel export failed.")
 
@@ -709,10 +624,7 @@ class MainWindow(QMainWindow):
             "<b>GRA-MicroAnalyzer</b> v1.0.0<br><br>"
             "Grey Relational Analysis for Microstructural Attribution<br>"
             "Designed for Material Science Researchers.<br><br>"
-            "Implements Deng Ju-Long\u2019s Grey Relational Analysis (1989) "
-            "for identifying dominant microstructural factors in material "
-            "degradation studies.<br><br>"
-            "<i>Open-source. Built with PySide6, Pandas, NumPy, Matplotlib.</i>",
+            "Built with PySide6, Pandas, NumPy, Matplotlib, and NetworkX.",
         )
 
     # ------------------------------------------------------------------
@@ -724,13 +636,22 @@ class MainWindow(QMainWindow):
             reply = QMessageBox.question(
                 self,
                 "Analysis in Progress",
-                "An analysis is currently running.\n\nClose anyway and wait for it to finish?",
+                "An analysis is currently running.\n\nClose after the worker finishes?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No,
             )
             if reply == QMessageBox.StandardButton.No:
                 event.ignore()
                 return
+            self._worker.requestInterruption()
             self._worker.wait(3_000)
+            if self._worker.isRunning():
+                QMessageBox.information(
+                    self,
+                    "Still Running",
+                    "The analysis is still running. The window will stay open to avoid corrupting the worker thread.",
+                )
+                event.ignore()
+                return
         event.accept()
         logger.info("MainWindow closed.")
