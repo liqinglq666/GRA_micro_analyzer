@@ -2,36 +2,28 @@
 """
 ui/widgets/plot_canvas.py
 Matplotlib canvas widget for embedding plots in PySide6 windows.
-
-KEY DESIGN RULE
----------------
-__init__ does NOT create any matplotlib Figure or FigureCanvas.
-display_figure() creates the one and only FigureCanvas for a given
-Figure and sizes it to fill this widget, redrawing on every resize.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Optional
 
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QFileDialog, QLabel, QSizePolicy, QVBoxLayout, QWidget,
+    QFileDialog,
+    QLabel,
+    QMessageBox,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
 )
 
 
 class PlotCanvas(QWidget):
-    """
-    Embeds a Matplotlib Figure directly inside a PySide6 widget.
-
-    The canvas expands to fill the entire widget area and redraws
-    automatically whenever the widget is resized, so charts always
-    use the available screen space.
-
-    No Figure or FigureCanvas is created in __init__.
-    """
+    """Embeds a Matplotlib Figure directly inside a PySide6 widget."""
 
     cell_hovered = Signal(str, str, float)   # row_label, col_label, value
 
@@ -46,7 +38,6 @@ class PlotCanvas(QWidget):
         self._canvas: Optional[FigureCanvas] = None
         self._show_toolbar = show_toolbar
 
-        # Placeholder shown before any figure is displayed
         self._placeholder = QLabel("Run analysis to display chart.")
         self._placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._placeholder.setStyleSheet("color: #888; font-size: 10pt;")
@@ -63,23 +54,8 @@ class PlotCanvas(QWidget):
     # ------------------------------------------------------------------
 
     def display_figure(self, figure: Figure) -> None:
-        """
-        Bind *figure* to a brand-new FigureCanvasQTAgg and display it,
-        filling this widget's current size.
-
-        The canvas is set to Expanding so it stretches with the window.
-        A matplotlib resize callback keeps the Figure in sync when the
-        widget is resized.
-        """
-        # Remove whatever is currently in the layout
-        while self._layout.count():
-            item = self._layout.takeAt(0)
-            w = item.widget()
-            if w is not None:
-                w.hide()
-                w.setParent(None)   # type: ignore[call-overload]
-                w.deleteLater()
-
+        """Bind *figure* to a brand-new FigureCanvasQTAgg and display it."""
+        self._clear_layout_widgets()
         self._figure = figure
 
         canvas = FigureCanvas(figure)
@@ -88,9 +64,17 @@ class PlotCanvas(QWidget):
 
         self._canvas = canvas
         self._layout.addWidget(canvas)
-
-        # Force an immediate synchronous render
         canvas.draw()
+
+    def clear(self, message: str = "Run analysis to display chart.") -> None:
+        """Remove the current figure and restore the placeholder message."""
+        self._clear_layout_widgets()
+        self._figure = None
+        self._canvas = None
+        self._placeholder = QLabel(message)
+        self._placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._placeholder.setStyleSheet("color: #888; font-size: 10pt;")
+        self._layout.addWidget(self._placeholder)
 
     def resizeEvent(self, event) -> None:   # type: ignore[override]
         """Redraw the canvas whenever the widget is resized."""
@@ -101,19 +85,52 @@ class PlotCanvas(QWidget):
     def prompt_save_figure(self, parent: Optional[QWidget] = None) -> None:
         """Open a save dialog and export the current figure."""
         if self._figure is None:
+            QMessageBox.information(parent or self, "No Figure", "Run analysis first.")
             return
-        path_str, _ = QFileDialog.getSaveFileName(
+
+        path_str, selected_filter = QFileDialog.getSaveFileName(
             parent or self,
             "Save Figure",
-            "figure",
+            "figure.svg",
             "SVG Image (*.svg);;PDF Document (*.pdf);;PNG Image (*.png)",
         )
         if not path_str:
             return
-        self._figure.savefig(path_str, bbox_inches="tight")
+
+        suffix = self._suffix_from_filter(selected_filter)
+        path = Path(path_str)
+        if path.suffix.lower() not in {".svg", ".pdf", ".png"}:
+            path = path.with_suffix(suffix)
+
+        try:
+            self._figure.savefig(path, bbox_inches="tight")
+            QMessageBox.information(parent or self, "Saved", f"Figure saved to:\n{path}")
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(parent or self, "Save Failed", str(exc))
 
     def get_figure(self) -> Optional[Figure]:
         return self._figure
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _clear_layout_widgets(self) -> None:
+        while self._layout.count():
+            item = self._layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.hide()
+                w.setParent(None)   # type: ignore[call-overload]
+                w.deleteLater()
+
+    @staticmethod
+    def _suffix_from_filter(selected_filter: str) -> str:
+        if "PDF" in selected_filter:
+            return ".pdf"
+        if "PNG" in selected_filter:
+            return ".png"
+        return ".svg"
 
     # ------------------------------------------------------------------
     # Heatmap hover detection
@@ -139,8 +156,12 @@ class PlotCanvas(QWidget):
         if not (0 <= row_idx < n_rows and 0 <= col_idx < n_cols):
             return
         value = float(data[row_idx, col_idx])
-        x_labels = [t.get_text() for t in ax.get_xticklabels()]
-        y_labels = [t.get_text() for t in ax.get_yticklabels()]
-        col_label = x_labels[col_idx] if col_idx < len(x_labels) else str(col_idx)
-        row_label = y_labels[row_idx] if row_idx < len(y_labels) else str(row_idx)
+        x_ticks = ax.get_xticklabels()
+        y_ticks = ax.get_yticklabels()
+        col_label = (
+            x_ticks[col_idx].get_gid() or x_ticks[col_idx].get_text()
+            if col_idx < len(x_ticks)
+            else str(col_idx)
+        )
+        row_label = y_ticks[row_idx].get_text() if row_idx < len(y_ticks) else str(row_idx)
         self.cell_hovered.emit(row_label, col_label, value)
