@@ -2,8 +2,7 @@
 # =========================================
 # Install with:  pip install -r requirements.txt
 #
-# Python >= 3.10 required (uses match/case-compatible type hints,
-# X | Y union syntax in annotations, and tomllib in stdlib).
+# Python >= 3.10 required.
 
 # --- UI Framework ---
 PySide6>=6.6.0,<7.0.0
@@ -16,8 +15,7 @@ pandas>=2.1.0,<3.0.0
 matplotlib>=3.8.0,<4.0.0
 networkx>=3.0.0,<4.0.0
 
-# --- Data Validation (optional but recommended) ---
-# If pydantic is absent, core/data_model.py falls back to stdlib dataclasses.
+# --- Data Validation ---
 pydantic>=2.5.0,<3.0.0
 
 # --- Excel I/O ---
