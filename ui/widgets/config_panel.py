@@ -2,12 +2,6 @@
 # ui/widgets/config_panel.py
 """
 GRA-MicroAnalyzer - Configuration Panel Widget
-===============================================
-Signals
--------
-dataset_loaded(pd.DataFrame, Path)
-run_requested(GRAConfig)
-status_message(str)
 """
 
 from __future__ import annotations
@@ -42,17 +36,16 @@ from utils.file_io import load_dataset
 
 logger = logging.getLogger(__name__)
 
-_RHO_SCALE: int = 100
-_RHO_DEFAULT: float = 0.5
-_RHO_MIN: float = 0.01
-_RHO_MAX: float = 1.00
+_RHO_SCALE = 100
+_RHO_DEFAULT = 0.5
+_RHO_MIN = 0.01
+_RHO_MAX = 1.00
 
 _POLARITY_OPTIONS: list[tuple[str, Polarity]] = [
     ("Larger is Better (+)", Polarity.LTB),
     ("Smaller is Better (-)", Polarity.STB),
 ]
 
-# 通用 GroupBox 样式：增大标题与内容间距，边框圆角
 _GROUP_STYLE = """
 QGroupBox {
     font-weight: bold;
@@ -72,24 +65,25 @@ QGroupBox::title {
 
 
 class ConfigPanel(QWidget):
-    dataset_loaded: Signal = Signal(object, object)   # (pd.DataFrame, Path)
-    run_requested: Signal = Signal(object)             # (GRAConfig,)
-    status_message: Signal = Signal(str)
+    dataset_loaded = Signal(object, object)   # (pd.DataFrame, Path)
+    run_requested = Signal(object)            # (GRAConfig,)
+    status_message = Signal(str)
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._dataframe: Optional[pd.DataFrame] = None
         self._file_path: Optional[Path] = None
-        self._run_timer: QElapsedTimer = QElapsedTimer()
-        self._dot_timer: QTimer = QTimer(self)
-        self._dot_count: int = 0
+        self._numeric_columns: list[str] = []
+        self._run_timer = QElapsedTimer()
+        self._dot_timer = QTimer(self)
+        self._dot_count = 0
         self._build_ui()
         self._connect_internal_signals()
 
     def _build_ui(self) -> None:
         root_layout = QVBoxLayout(self)
-        root_layout.setContentsMargins(10, 10, 10, 10)   # 增大外边距
-        root_layout.setSpacing(12)                         # 组件间距加大
+        root_layout.setContentsMargins(10, 10, 10, 10)
+        root_layout.setSpacing(12)
         root_layout.addWidget(self._build_file_group())
         root_layout.addWidget(self._build_column_group())
         root_layout.addWidget(self._build_polarity_group())
@@ -114,9 +108,7 @@ class ConfigPanel(QWidget):
 
         self._lbl_file = QLabel("No file loaded.")
         self._lbl_file.setWordWrap(True)
-        self._lbl_file.setStyleSheet(
-            "color: #888888; font-style: italic; font-size: 8pt;"
-        )
+        self._lbl_file.setStyleSheet("color: #888888; font-style: italic; font-size: 8pt;")
         layout.addWidget(self._lbl_file)
         return group
 
@@ -127,23 +119,17 @@ class ConfigPanel(QWidget):
         layout.setContentsMargins(10, 8, 10, 10)
         layout.setSpacing(6)
 
-        lbl_id = QLabel("Sample ID Column:")
-        lbl_id.setStyleSheet("font-size: 8pt; color: #495057;")
-        layout.addWidget(lbl_id)
+        layout.addWidget(QLabel("Sample ID Column:"))
         self._cmb_id_column = QComboBox()
         self._cmb_id_column.setMinimumHeight(26)
         layout.addWidget(self._cmb_id_column)
 
-        lbl_ref = QLabel("Reference Column (Target):")
-        lbl_ref.setStyleSheet("font-size: 8pt; color: #495057;")
-        layout.addWidget(lbl_ref)
+        layout.addWidget(QLabel("Reference Column (Target):"))
         self._cmb_ref_column = QComboBox()
         self._cmb_ref_column.setMinimumHeight(26)
         layout.addWidget(self._cmb_ref_column)
 
-        lbl_pol = QLabel("Reference Polarity:")
-        lbl_pol.setStyleSheet("font-size: 8pt; color: #495057;")
-        layout.addWidget(lbl_pol)
+        layout.addWidget(QLabel("Reference Polarity:"))
         self._cmb_ref_polarity = QComboBox()
         self._cmb_ref_polarity.setMinimumHeight(26)
         for label, _ in _POLARITY_OPTIONS:
@@ -172,7 +158,6 @@ class ConfigPanel(QWidget):
         self._tbl_polarity.setAlternatingRowColors(True)
         self._tbl_polarity.verticalHeader().setVisible(False)
         self._tbl_polarity.setMinimumHeight(100)
-        # 行高稍大，避免 combobox 被截断
         self._tbl_polarity.verticalHeader().setDefaultSectionSize(28)
 
         scroll = QScrollArea()
@@ -191,18 +176,14 @@ class ConfigPanel(QWidget):
         layout.setSpacing(6)
 
         header_row = QHBoxLayout()
-        lbl_left = QLabel("0.01")
-        lbl_left.setStyleSheet("font-size: 8pt; color: #666;")
+        header_row.addWidget(QLabel("0.01"))
+        header_row.addStretch()
         self._lbl_rho_value = QLabel(f"rho = {_RHO_DEFAULT:.2f}")
         self._lbl_rho_value.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._lbl_rho_value.setStyleSheet("font-weight: bold; font-size: 9pt;")
-        lbl_right = QLabel("1.00")
-        lbl_right.setStyleSheet("font-size: 8pt; color: #666;")
-        header_row.addWidget(lbl_left)
-        header_row.addStretch()
         header_row.addWidget(self._lbl_rho_value)
         header_row.addStretch()
-        header_row.addWidget(lbl_right)
+        header_row.addWidget(QLabel("1.00"))
         layout.addLayout(header_row)
 
         self._slider_rho = QSlider(Qt.Orientation.Horizontal)
@@ -217,18 +198,13 @@ class ConfigPanel(QWidget):
         self._btn_run = QPushButton(">> Run Analysis")
         self._btn_run.setEnabled(False)
         self._btn_run.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self._btn_run.setMinimumHeight(38)   # 稍高，更易点击
+        self._btn_run.setMinimumHeight(38)
         font = QFont()
         font.setBold(True)
         font.setPointSize(10)
         self._btn_run.setFont(font)
         self._btn_run.setStyleSheet(
-            "QPushButton {"
-            "  background-color: #2171B5;"
-            "  color: white;"
-            "  border-radius: 5px;"
-            "  padding: 6px 16px;"
-            "}"
+            "QPushButton { background-color: #2171B5; color: white; border-radius: 5px; padding: 6px 16px; }"
             "QPushButton:hover:enabled { background-color: #1A5C9A; }"
             "QPushButton:disabled { background-color: #ADB5BD; color: #F8F9FA; }"
         )
@@ -244,7 +220,9 @@ class ConfigPanel(QWidget):
 
     def _on_load_clicked(self) -> None:
         file_path_str, _ = QFileDialog.getOpenFileName(
-            self, "Open Dataset", "",
+            self,
+            "Open Dataset",
+            "",
             "Data Files (*.csv *.xlsx *.xls);;CSV Files (*.csv);;Excel Files (*.xlsx *.xls);;All Files (*)",
         )
         if not file_path_str:
@@ -253,43 +231,64 @@ class ConfigPanel(QWidget):
         self.status_message.emit(f"Loading {file_path.name}...")
         try:
             df = load_dataset(file_path)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             QMessageBox.critical(self, "Load Error", f"Failed to load '{file_path.name}':\n\n{exc}")
             self.status_message.emit("File load failed.")
             logger.exception("File load error for '%s'.", file_path)
             return
+
         self._dataframe = df
         self._file_path = file_path
+        self._numeric_columns = self._detect_numeric_columns(df)
         self._lbl_file.setText(f"{file_path.name}  ({len(df):,} rows)")
-        self._lbl_file.setStyleSheet(
-            "color: #1A6B2A; font-style: normal; font-size: 8pt; font-weight: bold;"
-        )
+        self._lbl_file.setStyleSheet("color: #1A6B2A; font-style: normal; font-size: 8pt; font-weight: bold;")
         self._populate_column_combos(df)
         self._refresh_polarity_table()
         self._btn_run.setEnabled(True)
+
+        numeric_note = f" {len(self._numeric_columns)} numeric-compatible column(s) detected."
         self.status_message.emit(
-            f"Loaded '{file_path.name}' - {len(df):,} rows x {len(df.columns)} columns."
+            f"Loaded '{file_path.name}' - {len(df):,} rows x {len(df.columns)} columns.{numeric_note}"
         )
         self.dataset_loaded.emit(df, file_path)
         logger.info("Dataset loaded: %s (%d rows).", file_path.name, len(df))
 
+    def _detect_numeric_columns(self, df: pd.DataFrame) -> list[str]:
+        numeric_columns: list[str] = []
+        for col in df.columns:
+            converted = pd.to_numeric(df[col], errors="coerce")
+            if converted.notna().sum() >= 2:
+                numeric_columns.append(col)
+        return numeric_columns
+
     def _populate_column_combos(self, df: pd.DataFrame) -> None:
-        columns = list(df.columns)
-        for cmb in (self._cmb_id_column, self._cmb_ref_column):
-            cmb.blockSignals(True)
-            cmb.clear()
-            cmb.addItems(columns)
-            cmb.blockSignals(False)
-        if len(columns) >= 2:
+        all_columns = list(df.columns)
+        numeric_columns = self._numeric_columns or all_columns
+
+        self._cmb_id_column.blockSignals(True)
+        self._cmb_id_column.clear()
+        self._cmb_id_column.addItems(all_columns)
+        self._cmb_id_column.blockSignals(False)
+
+        self._cmb_ref_column.blockSignals(True)
+        self._cmb_ref_column.clear()
+        self._cmb_ref_column.addItems(numeric_columns)
+        self._cmb_ref_column.blockSignals(False)
+
+        if all_columns:
             self._cmb_id_column.setCurrentIndex(0)
-            self._cmb_ref_column.setCurrentIndex(1)
+        if numeric_columns:
+            preferred_ref_idx = 1 if len(numeric_columns) > 1 else 0
+            self._cmb_ref_column.setCurrentIndex(preferred_ref_idx)
 
     def _refresh_polarity_table(self) -> None:
         if self._dataframe is None:
             return
         id_col = self._cmb_id_column.currentText()
         ref_col = self._cmb_ref_column.currentText()
-        comparative_cols = [col for col in self._dataframe.columns if col not in (id_col, ref_col)]
+        source_cols = self._numeric_columns or list(self._dataframe.columns)
+        comparative_cols = [col for col in source_cols if col not in (id_col, ref_col)]
+
         self._tbl_polarity.setRowCount(0)
         for row_idx, col_name in enumerate(comparative_cols):
             self._tbl_polarity.insertRow(row_idx)
@@ -319,34 +318,42 @@ class ConfigPanel(QWidget):
     def _build_config(self) -> Optional[GRAConfig]:
         id_col = self._cmb_id_column.currentText()
         ref_col = self._cmb_ref_column.currentText()
+        if not ref_col:
+            QMessageBox.warning(self, "Configuration Error", "Select a numeric-compatible reference column.")
+            return None
+
         ref_polarity_idx = self._cmb_ref_polarity.currentIndex()
         _, ref_polarity = _POLARITY_OPTIONS[ref_polarity_idx]
         rho = self._slider_rho.value() / _RHO_SCALE
+
         comparative_columns: dict[str, ColumnConfig] = {}
         for row in range(self._tbl_polarity.rowCount()):
-            factor_name = self._tbl_polarity.item(row, 0).text()
-            cmb: QComboBox = self._tbl_polarity.cellWidget(row, 1)  # type: ignore[assignment]
+            item = self._tbl_polarity.item(row, 0)
+            cmb = self._tbl_polarity.cellWidget(row, 1)
+            if item is None or not isinstance(cmb, QComboBox):
+                continue
+            factor_name = item.text()
             _, polarity = _POLARITY_OPTIONS[cmb.currentIndex()]
             comparative_columns[factor_name] = ColumnConfig(name=factor_name, polarity=polarity)
+
         if not comparative_columns:
-            QMessageBox.warning(
-                self, "Configuration Error",
-                "At least one comparative factor is required."
-            )
+            QMessageBox.warning(self, "Configuration Error", "At least one numeric comparative factor is required.")
             return None
         if ref_col == id_col:
-            QMessageBox.warning(
-                self, "Configuration Error",
-                "Reference column and ID column must be different."
-            )
+            QMessageBox.warning(self, "Configuration Error", "Reference column and ID column must be different.")
             return None
-        return GRAConfig(
-            id_column=id_col,
-            reference_column=ref_col,
-            reference_polarity=ref_polarity,
-            comparative_columns=comparative_columns,
-            rho=rho,
-        )
+
+        try:
+            return GRAConfig(
+                id_column=id_col,
+                reference_column=ref_col,
+                reference_polarity=ref_polarity,
+                comparative_columns=comparative_columns,
+                rho=rho,
+            )
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.warning(self, "Configuration Error", str(exc))
+            return None
 
     # ------------------------------------------------------------------
     # Public API — called by MainWindow
