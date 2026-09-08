@@ -2,13 +2,12 @@
 
 <div align="center">
 
-**Grey Relational Analysis for Microstructure–Property Association**
+**Grey Relational Analysis for Microstructure–Property Association**  
 *面向材料科学研究者的灰色关联分析桌面工具*
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
 [![PySide6](https://img.shields.io/badge/PySide6-6.6%2B-41CD52?style=flat-square&logo=qt&logoColor=white)](https://doc.qt.io/qtforpython/)
 [![License](https://img.shields.io/badge/License-Academic%20Only-red?style=flat-square)](#许可声明--license)
-[![Code Style](https://img.shields.io/badge/Code%20Style-Black-000000?style=flat-square)](https://github.com/psf/black)
 
 </div>
 
@@ -16,9 +15,9 @@
 
 ## 项目简介 | Overview
 
-**GRA-MicroAnalyzer** 是一款面向材料科学研究者的桌面应用程序，用于量化**宏观性能指标**（如抗拉应变、裂缝宽度、强度等）与**微观结构因素**（如结合水含量、孔隙特征、物相组成等）之间的灰色关联强度。
+**GRA-MicroAnalyzer** 用于量化宏观性能指标（抗拉应变、强度、裂缝宽度等）与微观结构因素（孔隙、结合水、物相组成等）之间的灰色关联强度。
 
-本工具基于灰色关联分析（Grey Relational Analysis, GRA），适合材料试验中常见的**小样本、指标多、信息不完备**场景，可将因素筛选从经验判断转化为可复现的数学计算流程。
+本工具面向材料试验常见的**小样本、多指标、信息不完备**场景，提供从数据检查、极性设置、灰色关联计算，到论文图和 Excel 审计输出的一体化工作流。
 
 > **Scientific scope:** GRA measures similarity/association between sequence patterns. A high GRG does **not** by itself prove causality or physical mechanism. Mechanistic interpretation should be supported by experiments, theory, microscopy, spectroscopy, or other independent evidence.
 
@@ -27,8 +26,6 @@
 ## 数学原理 | Mathematical Foundation
 
 ### 1. 极差归一化
-
-对于序列 $x_i(k)$，根据指标属性选择归一化策略。
 
 **望大型 Larger-the-Better, LTB**
 
@@ -75,7 +72,7 @@ graph TB
     MW --> TH[ui/threads.py\nGRAWorker]
     TH --> GE[core/gra_engine.py\nGreyRelationalAnalyzer]
     GE --> DM[core/data_model.py\nGRAConfig / GRAResult]
-    MW --> PS[utils/plot_styler.py\nMatplotlib Figures]
+    MW --> PS[utils/plot_styler.py\nPublication Figures]
     MW --> FI[utils/file_io.py\nLoad / Export]
 ```
 
@@ -84,26 +81,41 @@ graph TB
 ## 主要功能 | Features
 
 - CSV / Excel 数据导入。
-- 自动识别可靠数值列：默认要求至少 3 个有限数值，且有效率不低于 80%。
+- 自动识别可靠数值列：至少 3 个有限数值，且有效率不低于 80%。
 - 参考序列与比较序列分别设置 LTB / STB 极性。
-- **比较因素可逐项勾选**，避免所有数值列被强制纳入分析。
+- **比较因素逐项勾选**，避免无关数值列被自动纳入。
 - 自动处理缺失值、非数值内容以及 `+Inf/-Inf`。
-- 任一计算阶段若产生 NaN/Inf，立即停止而不是静默忽略。
+- 任一计算阶段若产生 NaN/Inf，立即停止，避免静默偏差。
 - 常量参考列报错，常量比较因素自动剔除并记录。
 - 输出 GRG 排名、归一化矩阵、Delta 矩阵、Xi 系数矩阵。
 - 并列 GRG 使用相同竞争名次（例如 1, 1, 3）。
-- Excel 导出包含 **Data Quality** 审计表：原始样本数、保留样本数、删除样本数、非数值转换、Inf 清洗、常量因素与警告。
-- 生成柱状图、热图、网络图、雷达图。
-- 大规模热图自动跳过渲染，避免 GUI 卡死，完整矩阵仍可导出 Excel。
-- 雷达图默认限制展示样本数量，避免图形不可读。
-- Excel、SVG、PDF、PNG 导出。
-- GitHub Actions 在 Python 3.10 / 3.12 自动运行测试。
+- Excel 包含 **Data Quality** 审计表。
+- 图形包括：GRG 排名、灰色关联系数热图、关联网络、归一化样本轮廓图。
+- GitHub Actions 在 Python 3.10 / 3.12 自动运行源码编译与测试。
+
+---
+
+## 论文级图表输出 | Publication Figures
+
+v1.1 起，所有图统一使用同一套 Matplotlib 论文排版体系：
+
+- Serif / Times New Roman 优先，STIX / DejaVu Serif 回退。
+- PDF 使用可嵌入 TrueType 字体，SVG 保留文本对象。
+- **SVG / PDF：矢量输出**，优先用于论文排版。
+- **PNG：600 dpi**，适合必须提交栅格图的场景。
+- 默认双栏宽度约 180 mm，图中文字按论文尺寸缩放。
+- GRG 柱状图固定使用理论尺度 `0–1`，避免自动缩放夸大差异。
+- 网络图线宽按**绝对 GRG** 映射，不再根据当前数据的 min/max 拉伸。
+- 网络布局采用确定性环形结构，相同数据重复绘图不会随机漂移。
+- 热图在矩阵较小时显示单元格数值；矩阵较大时自动取消格内数字，只保留色阶，降低视觉拥挤。
+- 热图使用感知更均匀的 `cividis` 色阶。
+- 雷达/样本轮廓图已统一到 Matplotlib，并支持 SVG / PDF / PNG。
+
+建议论文排版优先导出 `SVG` 或 `PDF`；只有目标期刊明确要求位图时，再使用 `PNG 600 dpi`。
 
 ---
 
 ## 快速开始 | Quick Start
-
-### 1. 安装运行环境
 
 ```bash
 git clone git@github.com:liqinglq666/GRA_micro_analyzer.git
@@ -123,15 +135,10 @@ macOS / Linux:
 source .venv/bin/activate
 ```
 
-安装依赖：
+安装依赖并启动：
 
 ```bash
 pip install -r requirements.txt
-```
-
-### 2. 启动 GUI
-
-```bash
 python main.py
 ```
 
@@ -139,36 +146,29 @@ python main.py
 
 ## 测试 | Tests
 
-开发环境安装：
-
 ```bash
 pip install -r requirements-dev.txt
+python -m pytest
 ```
 
-运行测试：
+当前测试覆盖：
 
-```bash
-pytest
-```
-
-测试覆盖内容包括：
-
-- 手工计算与 GRA 系数/GRG 对照。
+- 手工计算与 GRA 系数 / GRG 对照。
 - LTB / STB 归一化。
 - 非数值、缺失值、`+Inf/-Inf` 清洗。
-- 常量比较因素自动剔除。
-- 常量参考序列报错。
-- ρ 边界值（0.01 / 0.5 / 1.0）。
-- 缺失 ID 列。
+- 常量因素、缺失 ID、重复表头。
+- ρ 边界值。
 - 并列 GRG 排名。
-- 重复表头校验。
-- Excel Data Quality 审计表导出。
+- Excel Data Quality 输出。
+- 论文字体和导出设置。
+- 固定 GRG 坐标范围。
+- 大热图自动取消单元格标注。
+- 网络图绝对线宽映射。
+- SVG / PDF / PNG 图形导出。
 
 ---
 
 ## 数据格式建议 | Input Format
-
-建议数据表第一行为唯一列名，例如：
 
 | Sample | Tensile strain | Bound water | Porosity | Crack width |
 |---|---:|---:|---:|---:|
@@ -178,12 +178,11 @@ pytest
 使用建议：
 
 - `Sample` 作为 ID 列。
-- `Tensile strain` 或其他宏观性能作为 Reference Column。
-- 只勾选具有明确研究意义的微观结构指标作为 Comparative Factors。
-- 对“越大越好”的指标选择 LTB。
-- 对“越小越好”的指标选择 STB。
-- 如果 Data Quality 显示大量样本被删除，不应直接引用 GRG 排名，应先处理数据完整性问题。
-- 小于 5 个完整样本时软件会给出稳定性警告；结果仅建议用于探索性分析。
+- 宏观性能指标作为 Reference Column。
+- 只勾选具有明确研究意义的 Comparative Factors。
+- 对“越大越好”的指标选择 LTB，对“越小越好”的指标选择 STB。
+- 如果 Data Quality 显示大量样本被删除，应先处理数据完整性，再解释 GRG 排名。
+- 小于 5 个完整样本时软件会给出稳定性警告，结果仅建议用于探索性分析。
 
 ---
 
