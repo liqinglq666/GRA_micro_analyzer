@@ -25,6 +25,11 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
 
+      - name: Install Qt runtime dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip

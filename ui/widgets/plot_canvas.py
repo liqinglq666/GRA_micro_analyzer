@@ -22,7 +22,7 @@ from utils.plot_styler import export_figure
 
 
 class PlotCanvas(QWidget):
-    """Embeds a Matplotlib Figure directly inside a PySide6 widget."""
+    """Reusable Matplotlib figure host with a shared publication export flow."""
 
     cell_hovered = Signal(str, str, float)
 
@@ -31,23 +31,27 @@ class PlotCanvas(QWidget):
         parent: Optional[QWidget] = None,
         show_toolbar: bool = True,
         default_filename: str = "gra_figure",
+        placeholder_text: str = "Run analysis to display chart.",
     ) -> None:
         super().__init__(parent)
         self._figure: Optional[Figure] = None
         self._canvas: Optional[FigureCanvas] = None
         self._show_toolbar = show_toolbar
         self._default_filename = default_filename
+        self._placeholder_text = placeholder_text
 
-        self._placeholder = self._make_placeholder("Run analysis to display chart.")
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(0, 0, 0, 0)
         self._layout.setSpacing(0)
+        self._placeholder = self._make_placeholder(self._placeholder_text)
         self._layout.addWidget(self._placeholder)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
     def display_figure(self, figure: Figure) -> None:
+        """Replace the current content with *figure*."""
         self._clear_layout_widgets()
         self._figure = figure
+
         canvas = FigureCanvas(figure)
         canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         canvas.mpl_connect("motion_notify_event", self._on_mouse_move)
@@ -55,11 +59,13 @@ class PlotCanvas(QWidget):
         self._layout.addWidget(canvas)
         canvas.draw()
 
-    def clear(self, message: str = "Run analysis to display chart.") -> None:
+    def clear(self, message: Optional[str] = None) -> None:
+        """Remove the current figure and restore a placeholder message."""
         self._clear_layout_widgets()
         self._figure = None
         self._canvas = None
-        self._placeholder = self._make_placeholder(message)
+        placeholder = self._placeholder_text if message is None else message
+        self._placeholder = self._make_placeholder(placeholder)
         self._layout.addWidget(self._placeholder)
 
     def resizeEvent(self, event) -> None:  # type: ignore[override]
