@@ -64,7 +64,8 @@ class PlotCanvas(QWidget):
         self._clear_layout_widgets()
         self._figure = None
         self._canvas = None
-        self._placeholder = self._make_placeholder(message or self._placeholder_text)
+        placeholder = self._placeholder_text if message is None else message
+        self._placeholder = self._make_placeholder(placeholder)
         self._layout.addWidget(self._placeholder)
 
     def resizeEvent(self, event) -> None:  # type: ignore[override]
