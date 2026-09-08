@@ -30,7 +30,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
 
+      - name: Compile Python sources
+        run: python -m compileall -q core ui utils main.py
+
       - name: Run tests
         env:
           QT_QPA_PLATFORM: offscreen
-        run: pytest -q
+        run: python -m pytest -q
