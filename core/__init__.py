@@ -15,7 +15,13 @@ from core.exceptions import (
     NormalizationError,
     ComputationError,
 )
-from core.data_model import Polarity, ColumnConfig, GRAConfig, GRAResult
+from core.data_model import (
+    Polarity,
+    ColumnConfig,
+    GRAConfig,
+    DataQualityReport,
+    GRAResult,
+)
 from core.gra_engine import GreyRelationalAnalyzer
 
 __all__: list[str] = [
@@ -30,6 +36,7 @@ __all__: list[str] = [
     "Polarity",
     "ColumnConfig",
     "GRAConfig",
+    "DataQualityReport",
     "GRAResult",
     "GreyRelationalAnalyzer",
 ]
