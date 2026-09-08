@@ -1,8 +1,5 @@
 # -*- coding: utf-8 -*-
-"""
-ui/widgets/plot_canvas.py
-Matplotlib canvas widget for embedding plots in PySide6 windows.
-"""
+"""Matplotlib canvas widget for embedding and exporting publication figures."""
 
 from __future__ import annotations
 
@@ -21,120 +18,110 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from utils.plot_styler import export_figure
+
 
 class PlotCanvas(QWidget):
     """Embeds a Matplotlib Figure directly inside a PySide6 widget."""
 
-    cell_hovered = Signal(str, str, float)   # row_label, col_label, value
+    cell_hovered = Signal(str, str, float)
 
     def __init__(
         self,
         parent: Optional[QWidget] = None,
         show_toolbar: bool = True,
+        default_filename: str = "gra_figure",
     ) -> None:
         super().__init__(parent)
-
         self._figure: Optional[Figure] = None
         self._canvas: Optional[FigureCanvas] = None
         self._show_toolbar = show_toolbar
+        self._default_filename = default_filename
 
-        self._placeholder = QLabel("Run analysis to display chart.")
-        self._placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._placeholder.setStyleSheet("color: #888; font-size: 10pt;")
-
+        self._placeholder = self._make_placeholder("Run analysis to display chart.")
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(0, 0, 0, 0)
         self._layout.setSpacing(0)
         self._layout.addWidget(self._placeholder)
-
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-
     def display_figure(self, figure: Figure) -> None:
-        """Bind *figure* to a brand-new FigureCanvasQTAgg and display it."""
         self._clear_layout_widgets()
         self._figure = figure
-
         canvas = FigureCanvas(figure)
         canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         canvas.mpl_connect("motion_notify_event", self._on_mouse_move)
-
         self._canvas = canvas
         self._layout.addWidget(canvas)
         canvas.draw()
 
     def clear(self, message: str = "Run analysis to display chart.") -> None:
-        """Remove the current figure and restore the placeholder message."""
         self._clear_layout_widgets()
         self._figure = None
         self._canvas = None
-        self._placeholder = QLabel(message)
-        self._placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._placeholder.setStyleSheet("color: #888; font-size: 10pt;")
+        self._placeholder = self._make_placeholder(message)
         self._layout.addWidget(self._placeholder)
 
-    def resizeEvent(self, event) -> None:   # type: ignore[override]
-        """Redraw the canvas whenever the widget is resized."""
+    def resizeEvent(self, event) -> None:  # type: ignore[override]
         super().resizeEvent(event)
         if self._canvas is not None:
             self._canvas.draw_idle()
 
     def prompt_save_figure(self, parent: Optional[QWidget] = None) -> None:
-        """Open a save dialog and export the current figure."""
+        """Export the current figure through the shared publication pipeline."""
         if self._figure is None:
             QMessageBox.information(parent or self, "No Figure", "Run analysis first.")
             return
 
         path_str, selected_filter = QFileDialog.getSaveFileName(
             parent or self,
-            "Save Figure",
-            "figure.svg",
-            "SVG Image (*.svg);;PDF Document (*.pdf);;PNG Image (*.png)",
+            "Save Publication Figure",
+            f"{self._default_filename}.svg",
+            "SVG Vector (*.svg);;PDF Vector (*.pdf);;PNG 600 dpi (*.png)",
         )
         if not path_str:
             return
 
-        suffix = self._suffix_from_filter(selected_filter)
         path = Path(path_str)
-        if path.suffix.lower() not in {".svg", ".pdf", ".png"}:
-            path = path.with_suffix(suffix)
-
+        fmt = self._format_from_filter(selected_filter, path)
         try:
-            self._figure.savefig(path, bbox_inches="tight")
-            QMessageBox.information(parent or self, "Saved", f"Figure saved to:\n{path}")
+            saved = export_figure(self._figure, path, fmt=fmt)
+            QMessageBox.information(
+                parent or self,
+                "Saved",
+                f"Publication figure saved to:\n{saved}\n\n"
+                "SVG/PDF are vector formats; PNG is exported at 600 dpi.",
+            )
         except Exception as exc:  # noqa: BLE001
             QMessageBox.critical(parent or self, "Save Failed", str(exc))
 
     def get_figure(self) -> Optional[Figure]:
         return self._figure
 
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
     def _clear_layout_widgets(self) -> None:
         while self._layout.count():
             item = self._layout.takeAt(0)
-            w = item.widget()
-            if w is not None:
-                w.hide()
-                w.setParent(None)   # type: ignore[call-overload]
-                w.deleteLater()
+            widget = item.widget()
+            if widget is not None:
+                widget.hide()
+                widget.setParent(None)  # type: ignore[call-overload]
+                widget.deleteLater()
 
     @staticmethod
-    def _suffix_from_filter(selected_filter: str) -> str:
-        if "PDF" in selected_filter:
-            return ".pdf"
-        if "PNG" in selected_filter:
-            return ".png"
-        return ".svg"
+    def _make_placeholder(message: str) -> QLabel:
+        label = QLabel(message)
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        label.setStyleSheet("color: #777; font-size: 10pt;")
+        return label
 
-    # ------------------------------------------------------------------
-    # Heatmap hover detection
-    # ------------------------------------------------------------------
+    @staticmethod
+    def _format_from_filter(selected_filter: str, path: Path) -> str:
+        suffix = path.suffix.lower()
+        if suffix == ".pdf" or "PDF" in selected_filter:
+            return "pdf"
+        if suffix == ".png" or "PNG" in selected_filter:
+            return "png"
+        return "svg"
 
     def _on_mouse_move(self, event) -> None:
         if event.inaxes is None:
@@ -143,18 +130,17 @@ class PlotCanvas(QWidget):
         images = ax.get_images()
         if not images:
             return
-        im = images[0]
-        data = im.get_array()
-        if data is None:
+        image = images[0]
+        data = image.get_array()
+        if data is None or event.xdata is None or event.ydata is None:
             return
-        x, y = event.xdata, event.ydata
-        if x is None or y is None:
-            return
-        col_idx = int(round(x))
-        row_idx = int(round(y))
+
+        col_idx = int(round(event.xdata))
+        row_idx = int(round(event.ydata))
         n_rows, n_cols = data.shape
         if not (0 <= row_idx < n_rows and 0 <= col_idx < n_cols):
             return
+
         value = float(data[row_idx, col_idx])
         x_ticks = ax.get_xticklabels()
         y_ticks = ax.get_yticklabels()
