@@ -71,7 +71,7 @@ def _build_application() -> QApplication:
     app.setApplicationName("GRA-MicroAnalyzer")
     app.setApplicationDisplayName("GRA-MicroAnalyzer")
     app.setOrganizationName("MaterialScienceLab")
-    app.setApplicationVersion("1.0.0")
+    app.setApplicationVersion("1.1.0")
     return app
 
 

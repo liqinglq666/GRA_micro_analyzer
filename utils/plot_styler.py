@@ -1,43 +1,20 @@
 # -*- coding: utf-8 -*-
-# utils/plot_styler.py
 """
-GRA-MicroAnalyzer — Publication-Quality Plot Styler
-====================================================
-All Matplotlib figure construction is centralised here.  Figures are
-built to SCI-paper standards:
+Publication-quality plotting utilities for GRA-MicroAnalyzer.
 
-- Font:  Times New Roman (serif), fallback to DejaVu Serif.
-- DPI:   300 for raster previews; vector formats (SVG/PDF) are resolution-
-         independent.
-- Spines: Top and right spines removed on all axes.
-- Layout: tight_layout() applied before export.
-- Colour: High-contrast palettes drawn from established scientific colour
-          conventions (blue gradient for bars, RdYlGn diverging for
-          heatmaps).
-
-Public Functions
-----------------
-apply_sci_style()           — Apply the global rcParams style context.
-build_grg_bar_chart()       — Horizontal sorted bar chart of GRG values.
-build_coefficient_heatmap() — Annotated ξ(k) coefficient matrix.
-export_figure()             — Save a Figure to SVG, PDF, or PNG.
-plot_network_diagram()      — Topology network showing GRG coupling strengths.
-plot_radar_chart()          — Radar / spider chart comparing normalised sample profiles.
+The plotting layer is deliberately separated from the GRA computation layer.
+It provides a consistent typography, restrained visual hierarchy, deterministic
+layouts, and export settings suitable for manuscript preparation.
 """
 
 from __future__ import annotations
 
 import logging
+import textwrap
 from pathlib import Path
 from typing import Literal, Optional
 
-# networkx is imported lazily inside plot_network_diagram() so that the
-# rest of the module (bar chart, heatmap, radar chart) remains available
-# even when networkx is not installed.  Users who never select the Network
-# Diagram plot type will not encounter any import error at startup.
-
 import matplotlib
-import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 import numpy as np
 import pandas as pd
@@ -46,603 +23,396 @@ from matplotlib.figure import Figure
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Type aliases
-# ---------------------------------------------------------------------------
-
 ExportFormat = Literal["svg", "pdf", "png"]
 
-# ---------------------------------------------------------------------------
-# Colour constants
-# ---------------------------------------------------------------------------
+# Generic manuscript-friendly sizes. 7.09 in is approximately 180 mm.
+_DOUBLE_COLUMN_WIDTH_IN = 7.09
+_SINGLE_COLUMN_WIDTH_IN = 3.35
 
-_BLUE_DARK: str = "#2171B5"
-_BLUE_LIGHT: str = "#C6DBEF"
-_ORANGE: str = "#D94801"
-_GREY_TEXT: str = "#333333"
-_SPINE_COLOUR: str = "#AAAAAA"
+_PRIMARY = "#2F5D8A"
+_PRIMARY_LIGHT = "#BFD0E0"
+_ACCENT = "#9A4F35"
+_TEXT = "#222222"
+_MUTED = "#6E7781"
+_SPINE = "#8A8A8A"
+_GRID = "#D9D9D9"
+_CENTER = "#3D4650"
 
-# ---------------------------------------------------------------------------
-# Global style configuration
-# ---------------------------------------------------------------------------
+_HEATMAP_ANNOTATION_CELL_LIMIT = 200
+_NETWORK_EDGE_LABEL_LIMIT = 12
 
 _SCI_RC_PARAMS: dict[str, object] = {
     "font.family": "serif",
-    "font.serif": ["Times New Roman", "DejaVu Serif", "Liberation Serif"],
-    "font.size": 10,
-    "axes.titlesize": 11,
-    "axes.labelsize": 10,
-    "xtick.labelsize": 9,
-    "ytick.labelsize": 9,
-    "legend.fontsize": 9,
-    "figure.dpi": 100,
-    "savefig.dpi": 300,
+    "font.serif": [
+        "Times New Roman",
+        "Times",
+        "STIXGeneral",
+        "DejaVu Serif",
+        "Liberation Serif",
+    ],
+    "mathtext.fontset": "stix",
+    "font.size": 8.5,
+    "axes.titlesize": 9.5,
+    "axes.titleweight": "normal",
+    "axes.labelsize": 9.0,
+    "xtick.labelsize": 8.0,
+    "ytick.labelsize": 8.0,
+    "legend.fontsize": 8.0,
+    "legend.title_fontsize": 8.0,
+    "figure.dpi": 110,
+    "savefig.dpi": 600,
+    "savefig.bbox": "tight",
+    "savefig.pad_inches": 0.03,
     "axes.spines.top": False,
     "axes.spines.right": False,
-    "axes.edgecolor": _SPINE_COLOUR,
+    "axes.edgecolor": _SPINE,
     "axes.linewidth": 0.8,
+    "lines.linewidth": 1.2,
     "xtick.direction": "out",
     "ytick.direction": "out",
-    "xtick.major.size": 3.5,
-    "ytick.major.size": 3.5,
-    "xtick.color": _SPINE_COLOUR,
-    "ytick.color": _SPINE_COLOUR,
-    "text.color": _GREY_TEXT,
-    "axes.labelcolor": _GREY_TEXT,
+    "xtick.major.size": 3.0,
+    "ytick.major.size": 3.0,
+    "xtick.major.width": 0.7,
+    "ytick.major.width": 0.7,
+    "xtick.color": _SPINE,
+    "ytick.color": _SPINE,
+    "text.color": _TEXT,
+    "axes.labelcolor": _TEXT,
+    "axes.titlecolor": _TEXT,
     "figure.facecolor": "white",
     "axes.facecolor": "white",
+    "pdf.fonttype": 42,
+    "ps.fonttype": 42,
+    "svg.fonttype": "none",
 }
 
 
 def apply_sci_style() -> None:
-    """
-    Apply the publication-quality rcParams to the current Matplotlib session.
-
-    Call this once at application startup (in ``main.py``) before any
-    figures are created.  It sets a global style; individual functions
-    may override specific parameters via ``ax.set_*`` calls.
-    """
+    """Apply the global manuscript-oriented Matplotlib style."""
     matplotlib.rcParams.update(_SCI_RC_PARAMS)
-    logger.debug("SCI rcParams applied to Matplotlib session.")
-
-
-# ---------------------------------------------------------------------------
-# Public — Bar Chart
-# ---------------------------------------------------------------------------
+    logger.debug("Publication rcParams applied.")
 
 
 def build_grg_bar_chart(
     grg_series: pd.Series,
-    title: str = "Grey Relational Grade (GRG) — Factor Ranking",
+    title: str = "Grey relational grade ranking",
     threshold_line: Optional[float] = None,
-    figure_size: tuple[float, float] = (7.0, 4.5),
+    figure_size: Optional[tuple[float, float]] = None,
 ) -> Figure:
-    """
-    Build a horizontal bar chart of GRG values, sorted descending.
+    """Build a restrained horizontal ranking chart on the fixed GRG scale [0, 1]."""
+    if grg_series.empty:
+        raise ValueError("grg_series must contain at least one factor.")
 
-    Parameters
-    ----------
-    grg_series:
-        Pandas Series with factor names as index and GRG floats as values.
-    title:
-        Figure title string.
-    threshold_line:
-        Optional vertical dashed orange line at this GRG value.
-    figure_size:
-        ``(width_inches, height_inches)``.
-
-    Returns
-    -------
-    matplotlib.figure.Figure
-    """
-    sorted_series = grg_series.sort_values(ascending=True)
+    sorted_series = grg_series.sort_values(ascending=True, kind="mergesort")
     n_factors = len(sorted_series)
-    colours = _build_gradient_colours(n_factors)
+    if figure_size is None:
+        height = max(2.8, min(8.0, 1.55 + 0.34 * n_factors))
+        figure_size = (_DOUBLE_COLUMN_WIDTH_IN, height)
 
-    fig = Figure(figsize=figure_size, dpi=100)
+    fig = Figure(figsize=figure_size, dpi=110)
     ax = fig.add_subplot(111)
-    fig.subplots_adjust(left=0.22, right=0.96, top=0.93, bottom=0.10)
+    fig.subplots_adjust(left=0.30, right=0.97, top=0.90, bottom=0.14)
 
+    colours = [_PRIMARY_LIGHT] * n_factors
+    colours[-1] = _PRIMARY
     bars = ax.barh(
-        y=range(n_factors),
-        width=sorted_series.values,
+        range(n_factors),
+        sorted_series.to_numpy(dtype=float),
         color=colours,
         edgecolor="white",
-        linewidth=0.5,
-        height=0.65,
+        linewidth=0.4,
+        height=0.62,
     )
 
-    _annotate_bars(ax, bars, sorted_series.values)
-
+    _annotate_bars(ax, bars, sorted_series.to_numpy(dtype=float))
     ax.set_yticks(range(n_factors))
-    ax.set_yticklabels(
-        [_format_column_label(name) for name in sorted_series.index],
-        fontsize=9,
-    )
-    ax.set_xlabel("Grey Relational Grade (GRG)", labelpad=8)
-    ax.set_title(title, pad=12, fontweight="bold")
-    ax.set_xlim(0.0, min(1.05, sorted_series.max() * 1.15))
-    ax.xaxis.set_major_formatter(mticker.FormatStrFormatter("%.2f"))
+    ax.set_yticklabels([_wrap_label(name, 24) for name in sorted_series.index])
+    ax.set_xlabel("Grey relational grade (GRG)", labelpad=6)
+    ax.set_title(title, pad=8)
+    ax.set_xlim(0.0, 1.02)
+    ax.xaxis.set_major_locator(mticker.MultipleLocator(0.2))
+    ax.xaxis.set_major_formatter(mticker.FormatStrFormatter("%.1f"))
 
     if threshold_line is not None:
         _draw_threshold_line(ax, threshold_line)
 
-    _polish_axes(ax)
-
-    logger.debug("GRG bar chart built with %d factors.", n_factors)
+    _polish_cartesian_axes(ax, grid_axis="x")
     return fig
-
-
-# ---------------------------------------------------------------------------
-# Public — Coefficient Heatmap
-# ---------------------------------------------------------------------------
-
-_LABEL_MAX_CHARS: int = 12
-_ANNOT_FONT_MIN: float = 6.5
-_ANNOT_FONT_BASE: float = 9.0
 
 
 def build_coefficient_heatmap(
     coefficient_df: pd.DataFrame,
-    title: str = "Grey Relational Coefficient Matrix ξ(k)",
+    title: str = "Grey relational coefficient matrix",
     figure_size: Optional[tuple[float, float]] = None,
 ) -> Figure:
-    """
-    Build an annotated heatmap of the ξ(k) relational coefficient matrix.
+    """Build a coefficient heatmap with automatic annotation suppression."""
+    if coefficient_df.empty:
+        raise ValueError("coefficient_df must not be empty.")
 
-    Parameters
-    ----------
-    coefficient_df:
-        DataFrame of shape ``(n_samples, n_comparative)`` with ξ(k) values.
-    title:
-        Figure title string.
-    figure_size:
-        Override auto-computed size.
-
-    Returns
-    -------
-    matplotlib.figure.Figure
-    """
-    data = coefficient_df.values
+    data = coefficient_df.to_numpy(dtype=float)
     n_samples, n_factors = data.shape
+    if not np.isfinite(data).all():
+        raise ValueError("coefficient_df contains non-finite values.")
 
     if figure_size is None:
-        auto_width = max(9.0, 7.0 + n_factors * 0.9)
-        auto_height = max(4.0, 2.8 + n_samples * 0.45)
-        computed_size: tuple[float, float] = (auto_width, auto_height)
-    else:
-        computed_size = figure_size
+        width = max(_DOUBLE_COLUMN_WIDTH_IN, min(12.0, 4.6 + 0.55 * n_factors))
+        height = max(3.2, min(12.0, 2.2 + 0.28 * n_samples))
+        figure_size = (width, height)
 
-    fig = Figure(figsize=computed_size, dpi=100)
+    fig = Figure(figsize=figure_size, dpi=110)
     ax = fig.add_subplot(111)
-    fig.subplots_adjust(left=0.12, right=0.88, top=0.92, bottom=0.18)
+    fig.subplots_adjust(left=0.13, right=0.90, top=0.90, bottom=0.22)
 
-    img = ax.imshow(
+    image = ax.imshow(
         data,
-        cmap="Blues",
+        cmap="cividis",
         aspect="auto",
+        interpolation="nearest",
         vmin=0.0,
         vmax=1.0,
     )
+    cbar = fig.colorbar(image, ax=ax, fraction=0.035, pad=0.025)
+    cbar.set_label(r"Grey relational coefficient, $\xi(k)$", rotation=270, labelpad=14)
+    cbar.ax.tick_params(labelsize=7.5, width=0.6, length=2.5)
 
-    cbar = fig.colorbar(img, ax=ax, fraction=0.035, pad=0.03)
-    cbar.set_label("ξ(k) Relational Coefficient", labelpad=10, rotation=270, va="bottom")
-    cbar.ax.tick_params(labelsize=8)
-
-    annot_fmt = ".2f" if n_factors > 8 else ".3f"
-    annot_fontsize = max(_ANNOT_FONT_MIN, _ANNOT_FONT_BASE - n_factors * 0.22)
-    _annotate_heatmap_cells(ax, data, fmt=annot_fmt, fontsize=annot_fontsize)
-
-    x_rotation = 50 if n_factors > 6 else 35
-    raw_labels = [_format_column_label(col) for col in coefficient_df.columns]
-    display_labels = [
-        (lbl if len(lbl) <= _LABEL_MAX_CHARS else lbl[:_LABEL_MAX_CHARS - 1] + "...")
-        for lbl in raw_labels
-    ]
-
+    x_labels = [_wrap_label(col, 18) for col in coefficient_df.columns]
+    raw_x_labels = [_format_column_label(col) for col in coefficient_df.columns]
+    rotation = 45 if n_factors > 5 else 25
     ax.set_xticks(range(n_factors))
-    x_tick_labels = ax.set_xticklabels(
-        display_labels,
-        rotation=x_rotation,
+    tick_artists = ax.set_xticklabels(
+        x_labels,
+        rotation=rotation,
         ha="right",
         rotation_mode="anchor",
-        fontsize=max(7.0, 9.5 - n_factors * 0.18),
     )
-    for tick_lbl, full_name in zip(x_tick_labels, raw_labels):
-        tick_lbl.set_gid(full_name)
+    for artist, raw_label in zip(tick_artists, raw_x_labels):
+        artist.set_gid(raw_label)
 
     ax.set_yticks(range(n_samples))
-    ax.set_yticklabels(
-        coefficient_df.index.tolist(),
-        fontsize=max(7.5, 9.5 - n_samples * 0.18),
-    )
-    ax.set_xlabel("Comparative Factor", labelpad=10)
-    ax.set_ylabel("Sample ID", labelpad=10)
-    ax.set_title(title, pad=14, fontweight="bold")
+    ax.set_yticklabels([str(value) for value in coefficient_df.index])
+    ax.set_xlabel("Comparative factor", labelpad=6)
+    ax.set_ylabel("Sample ID", labelpad=6)
+    ax.set_title(title, pad=8)
+
+    if n_samples * n_factors <= _HEATMAP_ANNOTATION_CELL_LIMIT:
+        annotation_size = max(6.0, 8.0 - 0.10 * max(n_samples, n_factors))
+        _annotate_heatmap_cells(ax, data, fontsize=annotation_size)
 
     for spine in ax.spines.values():
         spine.set_visible(True)
-        spine.set_color(_SPINE_COLOUR)
+        spine.set_color(_SPINE)
         spine.set_linewidth(0.6)
-
-    logger.debug(
-        "Coefficient heatmap built — shape (%d × %d).",
-        n_samples, n_factors,
-    )
+    ax.tick_params(which="both", width=0.6, length=2.5)
     return fig
-
-
-# ---------------------------------------------------------------------------
-# Public — Network Diagram
-# ---------------------------------------------------------------------------
-
-_NETWORK_CENTER_COLOR: str = "#D94801"
-_NETWORK_PEER_COLOR: str = "#AEC6E8"
-_NETWORK_CENTER_SIZE: int = 1_800
-_NETWORK_PEER_SIZE: int = 900
-_NETWORK_LW_MIN: float = 0.8
-_NETWORK_LW_MAX: float = 6.0
 
 
 def plot_network_diagram(
     target_name: str,
     grg_scores: dict[str, float],
-    title: str = "Topology Network — GRG Coupling Strength",
-    colormap_name: str = "Blues",
-    figure_size: tuple[float, float] = (7.5, 6.0),
+    title: str = "GRG association network",
+    colormap_name: str = "cividis",
+    figure_size: tuple[float, float] = (_DOUBLE_COLUMN_WIDTH_IN, 5.2),
 ) -> Figure:
     """
-    Build a topology network diagram with GRG-weighted edges.
+    Build a deterministic association network.
 
-    networkx is imported lazily here — the module loads fine without it.
-
-    Parameters
-    ----------
-    target_name:
-        Centre node label (reference sequence name).
-    grg_scores:
-        ``{factor_name: grg_value}`` for all comparative factors.
-    title:
-        Figure title.
-    colormap_name:
-        Matplotlib colormap for edge colour encoding.
-    figure_size:
-        ``(width_inches, height_inches)``.
-
-    Returns
-    -------
-    matplotlib.figure.Figure
-
-    Raises
-    ------
-    ImportError
-        If networkx is not installed.
-    ValueError
-        If grg_scores is empty.
+    Edge width is mapped to the *absolute* GRG value, not re-scaled against
+    the current minimum and maximum. This avoids visually exaggerating small
+    differences between factors.
     """
-    # Lazy import — only required for this function.
     try:
         import networkx as nx  # type: ignore[import-untyped]  # noqa: PLC0415
     except ImportError as exc:
-        raise ImportError(
-            "networkx is required for the Network Diagram feature.\n"
-            "Install it via:  pip install networkx>=3.0"
-        ) from exc
+        raise ImportError("networkx is required for the Network Diagram feature.") from exc
 
     if not grg_scores:
-        raise ValueError(
-            "plot_network_diagram requires at least one GRG score entry."
-        )
+        raise ValueError("grg_scores must contain at least one factor.")
 
-    factor_names: list[str] = list(grg_scores.keys())
-    grg_values: np.ndarray = np.clip(
-        np.array([grg_scores[f] for f in factor_names], dtype=float), 0.0, 1.0
-    )
+    ordered = sorted(grg_scores.items(), key=lambda item: (-item[1], item[0]))
+    factor_names = [name for name, _ in ordered]
+    grg_values = np.clip(np.array([value for _, value in ordered], dtype=float), 0.0, 1.0)
+    if not np.isfinite(grg_values).all():
+        raise ValueError("grg_scores contain non-finite values.")
 
-    G: nx.Graph = nx.Graph()
-    G.add_node(target_name)
-    for factor, grg in zip(factor_names, grg_values):
-        G.add_node(factor)
-        G.add_edge(target_name, factor, grg=float(grg))
-
-    init_pos: dict[str, tuple[float, float]] = {target_name: (0.0, 0.0)}
     n_factors = len(factor_names)
-    for i, f in enumerate(factor_names):
-        angle = 2.0 * np.pi * i / max(n_factors, 1)
-        init_pos[f] = (np.cos(angle), np.sin(angle))
+    graph = nx.Graph()
+    graph.add_node(target_name)
+    for name, value in zip(factor_names, grg_values):
+        graph.add_edge(target_name, name, grg=float(value))
 
-    if n_factors >= 2:
-        pos: dict[str, tuple[float, float]] = nx.spring_layout(
-            G,
-            pos=init_pos,
-            fixed=[target_name],
-            k=1.8 / np.sqrt(n_factors),
-            iterations=80,
-            seed=42,
-        )
-    else:
-        pos = init_pos
+    positions: dict[str, tuple[float, float]] = {target_name: (0.0, 0.0)}
+    for idx, name in enumerate(factor_names):
+        angle = 2.0 * np.pi * idx / max(n_factors, 1) - np.pi / 2.0
+        positions[name] = (float(np.cos(angle)), float(np.sin(angle)))
+
+    fig = Figure(figsize=figure_size, dpi=110)
+    ax = fig.add_subplot(111)
+    fig.subplots_adjust(left=0.05, right=0.88, top=0.90, bottom=0.06)
 
     cmap = matplotlib.colormaps.get_cmap(colormap_name)
     norm = matplotlib.colors.Normalize(vmin=0.0, vmax=1.0)
 
-    grg_min, grg_max = grg_values.min(), grg_values.max()
-    lw_range = _NETWORK_LW_MAX - _NETWORK_LW_MIN
-
-    if np.isclose(grg_min, grg_max):
-        edge_linewidths: list[float] = [_NETWORK_LW_MIN + lw_range * 0.5] * n_factors
-    else:
-        edge_linewidths = [
-            _NETWORK_LW_MIN + lw_range * (g - grg_min) / (grg_max - grg_min)
-            for g in grg_values
-        ]
-
-    edge_colours: list[tuple[float, float, float, float]] = [
-        cmap(norm(g)) for g in grg_values
-    ]
-
-    peripheral_nodes: list[str] = factor_names
-    center_node: list[str] = [target_name]
-    edge_list: list[tuple[str, str]] = [(target_name, f) for f in factor_names]
-
-    fig = Figure(figsize=figure_size, dpi=100)
-    ax = fig.add_subplot(111)
-    fig.subplots_adjust(left=0.05, right=0.88, top=0.92, bottom=0.05)
-
     nx.draw_networkx_nodes(
-        G, pos, nodelist=peripheral_nodes,
-        node_color=_NETWORK_PEER_COLOR, node_size=_NETWORK_PEER_SIZE,
-        ax=ax, linewidths=0.8, edgecolors="#5A7FA8",
+        graph,
+        positions,
+        nodelist=factor_names,
+        node_color=grg_values,
+        cmap=cmap,
+        vmin=0.0,
+        vmax=1.0,
+        node_size=620,
+        linewidths=0.6,
+        edgecolors="white",
+        ax=ax,
     )
     nx.draw_networkx_nodes(
-        G, pos, nodelist=center_node,
-        node_color=_NETWORK_CENTER_COLOR, node_size=_NETWORK_CENTER_SIZE,
-        ax=ax, linewidths=1.2, edgecolors="#8B2500",
+        graph,
+        positions,
+        nodelist=[target_name],
+        node_color=_CENTER,
+        node_size=1180,
+        linewidths=0.8,
+        edgecolors="white",
+        ax=ax,
     )
 
-    for (u, v), lw, colour in zip(edge_list, edge_linewidths, edge_colours):
+    for name, value in zip(factor_names, grg_values):
         nx.draw_networkx_edges(
-            G, pos, edgelist=[(u, v)],
-            width=lw, edge_color=[colour], alpha=0.85, ax=ax, style="solid",
+            graph,
+            positions,
+            edgelist=[(target_name, name)],
+            width=_network_linewidth(float(value)),
+            edge_color=[cmap(norm(value))],
+            alpha=_network_alpha(float(value)),
+            ax=ax,
         )
 
     nx.draw_networkx_labels(
-        G, pos,
-        labels={target_name: _format_column_label(target_name)},
-        font_size=8, font_color="white", font_weight="bold", ax=ax,
+        graph,
+        positions,
+        labels={target_name: _wrap_label(target_name, 14)},
+        font_size=7.5,
+        font_color="white",
+        font_weight="bold",
+        ax=ax,
     )
-    label_pos: dict[str, tuple[float, float]] = {
-        f: (pos[f][0], pos[f][1] + 0.07) for f in peripheral_nodes
-    }
+
+    label_positions: dict[str, tuple[float, float]] = {}
+    for name in factor_names:
+        x, y = positions[name]
+        scale = 1.13
+        label_positions[name] = (x * scale, y * scale)
     nx.draw_networkx_labels(
-        G, label_pos,
-        labels={f: _format_column_label(f) for f in peripheral_nodes},
-        font_size=7.5, font_color=_GREY_TEXT, ax=ax,
+        graph,
+        label_positions,
+        labels={name: _wrap_label(name, 15) for name in factor_names},
+        font_size=7.2,
+        font_color=_TEXT,
+        ax=ax,
     )
 
-    for (u, v), grg_val in zip(edge_list, grg_values):
-        mid_x = (pos[u][0] + pos[v][0]) / 2.0
-        mid_y = (pos[u][1] + pos[v][1]) / 2.0
-        ax.text(
-            mid_x, mid_y, f"{grg_val:.3f}",
-            fontsize=6.5, ha="center", va="center", color=_GREY_TEXT,
-            bbox=dict(boxstyle="round,pad=0.15", facecolor="white",
-                      edgecolor="none", alpha=0.75),
-        )
+    if n_factors <= _NETWORK_EDGE_LABEL_LIMIT:
+        for name, value in zip(factor_names, grg_values):
+            x, y = positions[name]
+            ax.text(
+                x * 0.52,
+                y * 0.52,
+                f"{value:.3f}",
+                fontsize=6.3,
+                ha="center",
+                va="center",
+                color=_TEXT,
+                bbox=dict(
+                    boxstyle="round,pad=0.12",
+                    facecolor="white",
+                    edgecolor="none",
+                    alpha=0.80,
+                ),
+            )
 
-    sm = matplotlib.cm.ScalarMappable(cmap=cmap, norm=norm)
-    sm.set_array([])
-    cbar = fig.colorbar(sm, ax=ax, fraction=0.030, pad=0.02)
-    cbar.set_label(
-        "Grey Relational Grade (GRG)",
-        labelpad=10, rotation=270, va="bottom", fontsize=9,
-    )
-    cbar.ax.tick_params(labelsize=8)
+    scalar = matplotlib.cm.ScalarMappable(cmap=cmap, norm=norm)
+    scalar.set_array([])
+    cbar = fig.colorbar(scalar, ax=ax, fraction=0.030, pad=0.015)
+    cbar.set_label("Grey relational grade (GRG)", rotation=270, labelpad=13)
+    cbar.ax.tick_params(labelsize=7.5, width=0.6, length=2.5)
 
-    ax.set_title(title, pad=14, fontweight="bold", fontsize=11)
+    ax.set_title(title, pad=8)
+    ax.set_xlim(-1.35, 1.35)
+    ax.set_ylim(-1.25, 1.25)
+    ax.set_aspect("equal")
     ax.axis("off")
-
-    logger.debug("Network diagram built — %d factors, centre '%s'.", n_factors, target_name)
     return fig
-
-
-# ---------------------------------------------------------------------------
-# Public — Radar Chart
-# ---------------------------------------------------------------------------
-
-_RADAR_MIN_CATEGORIES: int = 3
-_RADAR_FILL_ALPHA: float = 0.25
-_RADAR_YLIM_MAX: float = 1.05
-_RADAR_GRID_LEVELS: int = 5
 
 
 def plot_radar_chart(
     categories: list[str],
     data_dict: dict[str, list[float]],
-    title: str = "Optimization Envelope - Normalised Sample Profiles",
-    figure_size: tuple[float, float] = (8.0, 7.5),
+    title: str = "Normalised sample profiles",
+    figure_size: tuple[float, float] = (_DOUBLE_COLUMN_WIDTH_IN, 5.5),
 ) -> Figure:
-    """
-    Build a publication-quality radar (spider) chart.
-
-    Each sample in *data_dict* is drawn as a closed polygon on polar axes.
-    Values must lie in [0, 1] (GRA normalisation range).
-
-    Closure
-    -------
-    Both angles and values are explicitly closed::
-
-        angles_closed = np.append(angles, angles[0] + 2π)
-        values_closed = np.append(values, values[0])
-
-    The ``+ 2π`` ensures the closing arc travels the correct short forward
-    path rather than wrapping backwards across the chart.
-
-    Parameters
-    ----------
-    categories:
-        Ordered list of factor names (spoke labels).
-    data_dict:
-        ``{sample_id: [v1, v2, ..., vN]}`` with values in [0, 1].
-    title:
-        Figure title.
-    figure_size:
-        ``(width_inches, height_inches)``.
-
-    Returns
-    -------
-    matplotlib.figure.Figure
-    """
-    n_cats = len(categories)
-
-    # ------------------------------------------------------------------ #
-    # Edge case: too few categories                                        #
-    # ------------------------------------------------------------------ #
-    if n_cats < _RADAR_MIN_CATEGORIES:
-        fig_err = Figure(figsize=figure_size, dpi=100)
-        ax_err = fig_err.add_subplot(111)          # plain axes — predictable behaviour
-        ax_err.set_title(title, pad=18, fontweight="bold", fontsize=11)
-        ax_err.text(
-            0.5, 0.5,
-            f"At least {_RADAR_MIN_CATEGORIES} comparative factors are\n"
-            "required for a Radar Chart.\n"
-            f"Current selection: {n_cats} factor(s).",
-            transform=ax_err.transAxes,
-            ha="center", va="center",
-            fontsize=10, color=_GREY_TEXT,
-            bbox=dict(boxstyle="round,pad=0.5", facecolor="#FFF3CD",
-                      edgecolor="#FFC107", alpha=0.9),
+    """Build a manuscript-styled radar chart using the shared Matplotlib style."""
+    n_categories = len(categories)
+    if n_categories < 3:
+        fig = Figure(figsize=figure_size, dpi=110)
+        ax = fig.add_subplot(111)
+        ax.text(
+            0.5,
+            0.5,
+            f"At least 3 comparative factors are required (got {n_categories}).",
+            ha="center",
+            va="center",
+            transform=ax.transAxes,
         )
-        ax_err.axis("off")
-        logger.warning(
-            "plot_radar_chart: %d categories supplied (min %d); returning placeholder.",
-            n_cats, _RADAR_MIN_CATEGORIES,
-        )
-        return fig_err
+        ax.axis("off")
+        return fig
 
-    # ------------------------------------------------------------------ #
-    # Figure + polar axes                                                  #
-    # Use Figure() directly (not plt.subplots) to avoid pyplot's global   #
-    # figure manager interfering with PySide6's FigureCanvasQTAgg embed.  #
-    # ------------------------------------------------------------------ #
-    fig = Figure(figsize=figure_size, dpi=100)
-    # Use add_axes with explicit rect [left, bottom, width, height] in figure
-    # fraction coordinates. This is the ONLY reliable way to centre a polar
-    # axes — subplots_adjust and tight_layout both have known bugs with polar
-    # projections in matplotlib and produce off-centre / clipped circles.
-    # Margins: 0.15 left/right for spoke labels, 0.18 bottom for legend, 0.10 top for title.
-    ax = fig.add_axes([0.15, 0.18, 0.70, 0.72], polar=True)
-    ax.set_clip_on(False)
+    angles = np.linspace(0.0, 2.0 * np.pi, n_categories, endpoint=False)
+    angles_closed = np.append(angles, angles[0])
 
-    # ------------------------------------------------------------------ #
-    # Spoke angles                                                         #
-    # First spoke at 12 o'clock: apply rotation = -π/2                   #
-    # ------------------------------------------------------------------ #
-    angles_raw: np.ndarray = np.linspace(0.0, 2.0 * np.pi, n_cats, endpoint=False)
-    _ROTATION: float = -np.pi / 2.0
-    angles: np.ndarray = angles_raw + _ROTATION
+    fig = Figure(figsize=figure_size, dpi=110)
+    ax = fig.add_subplot(111, polar=True)
+    fig.subplots_adjust(left=0.13, right=0.87, top=0.88, bottom=0.18)
+    ax.set_theta_offset(np.pi / 2.0)
+    ax.set_theta_direction(-1)
 
-    # Closed array for ax.plot() — append first angle + 2π to ensure the
-    # closing segment travels the forward (short) arc, not backwards.
-    angles_closed: np.ndarray = np.append(
-        angles, angles_raw[0] + _ROTATION + 2.0 * np.pi
-    )
-
-    # ------------------------------------------------------------------ #
-    # Colour palette — tab10, one colour per sample                       #
-    # ------------------------------------------------------------------ #
-    sample_ids: list[str] = list(data_dict.keys())
-    n_samples = len(sample_ids)
     palette = matplotlib.colormaps.get_cmap("tab10")
-    colours: list[tuple[float, float, float, float]] = [
-        palette(i % 10) for i in range(n_samples)
-    ]
-
-    # ------------------------------------------------------------------ #
-    # Draw each sample polygon                                            #
-    # ------------------------------------------------------------------ #
-    for (sample_id, raw_values), colour in zip(data_dict.items(), colours):
-        values_arr: np.ndarray = np.array(
-            _pad_or_truncate(list(raw_values), n_cats), dtype=float
-        )
-        values_arr = np.clip(values_arr, 0.0, 1.0)
-        values_closed: np.ndarray = np.append(values_arr, values_arr[0])
-
-        ax.fill(angles_closed, values_closed, color=colour, alpha=_RADAR_FILL_ALPHA)
+    for idx, (sample_id, values) in enumerate(data_dict.items()):
+        arr = np.asarray(_pad_or_truncate(values, n_categories), dtype=float)
+        arr = np.clip(arr, 0.0, 1.0)
+        values_closed = np.append(arr, arr[0])
+        colour = palette(idx % 10)
         ax.plot(
-            angles_closed, values_closed,
-            color=colour, linewidth=1.6, linestyle="-", label=sample_id,
+            angles_closed,
+            values_closed,
+            linewidth=1.2,
+            marker="o",
+            markersize=2.8,
+            label=str(sample_id),
+            color=colour,
         )
-        ax.scatter(
-            angles, values_arr,
-            color=colour, s=28, zorder=5, linewidths=0.8, edgecolors="white",
-        )
+        ax.fill(angles_closed, values_closed, color=colour, alpha=0.07)
 
-    # ------------------------------------------------------------------ #
-    # Spoke labels                                                         #
-    # ------------------------------------------------------------------ #
     ax.set_xticks(angles)
-    display_labels = [
-        (
-            _format_column_label(cat)
-            if len(cat) <= _LABEL_MAX_CHARS
-            else _format_column_label(cat[:_LABEL_MAX_CHARS - 1]) + "..."
-        )
-        for cat in categories
-    ]
-    ax.set_xticklabels(display_labels, fontsize=8.5, color=_GREY_TEXT)
-    # Prevent individual tick label artists from being clipped
-    for lbl in ax.get_xticklabels():
-        lbl.set_clip_on(False)
+    ax.set_xticklabels([_wrap_label(cat, 13) for cat in categories], fontsize=7.8)
+    ax.set_ylim(0.0, 1.0)
+    ticks = np.linspace(0.2, 1.0, 5)
+    ax.set_yticks(ticks)
+    ax.set_yticklabels([f"{value:.1f}" for value in ticks], fontsize=6.8, color=_MUTED)
+    ax.set_rlabel_position(12)
+    ax.grid(color=_GRID, linewidth=0.6, linestyle="-")
+    ax.spines["polar"].set_color(_SPINE)
+    ax.spines["polar"].set_linewidth(0.7)
+    ax.set_title(title, pad=14)
 
-    # ------------------------------------------------------------------ #
-    # Radial axis                                                          #
-    # ------------------------------------------------------------------ #
-    ax.set_ylim(0.0, _RADAR_YLIM_MAX)
-
-    grid_ticks = np.linspace(0.0, 1.0, _RADAR_GRID_LEVELS + 1)[1:]
-    ax.set_yticks(grid_ticks)
-    ax.set_yticklabels(
-        [f"{v:.1f}" for v in grid_ticks],
-        fontsize=7, color=_SPINE_COLOUR,
-    )
-    ax.yaxis.set_tick_params(labelsize=7)
-
-    # Place radial labels midway between spoke 1 and spoke 2 to avoid overlap.
-    # Matplotlib set_rlabel_position() uses degrees, 0° = right, CCW positive.
-    # Our rotation puts spoke 1 at top = 90° in Matplotlib coords.
-    # Offset by half a spoke gap to land between spoke 1 and spoke N.
-    _half_gap_deg: float = (360.0 / n_cats) / 2.0
-    ax.set_rlabel_position(90.0 + _half_gap_deg)
-
-    ax.grid(visible=True, color=_SPINE_COLOUR, linestyle=":", linewidth=0.6, alpha=0.7)
-    ax.spines["polar"].set_visible(False)
-
-    # ------------------------------------------------------------------ #
-    # Legend and title                                                     #
-    # ------------------------------------------------------------------ #
-    if n_samples > 1:
+    if len(data_dict) > 1:
         ax.legend(
-            loc="lower center",
-            bbox_to_anchor=(0.5, -0.22),
-            bbox_transform=ax.transAxes,
-            frameon=True,
-            framealpha=0.85,
-            fontsize=8,
+            loc="upper center",
+            bbox_to_anchor=(0.5, -0.10),
+            ncol=min(4, len(data_dict)),
+            frameon=False,
             title="Sample ID",
-            title_fontsize=8,
-            ncol=min(n_samples, 4),
         )
-
-    ax.set_title(title, pad=18, fontweight="bold", fontsize=11)
-
-    logger.debug("Radar chart built — %d categories, %d samples.", n_cats, n_samples)
     return fig
-
-
-# ---------------------------------------------------------------------------
-# Public — Export
-# ---------------------------------------------------------------------------
 
 
 def export_figure(
@@ -652,122 +422,130 @@ def export_figure(
     transparent: bool = False,
 ) -> Path:
     """
-    Save a Matplotlib Figure to disk.
+    Export a figure using manuscript-oriented defaults.
 
-    Parameters
-    ----------
-    figure:
-        The Figure to save.
-    output_path:
-        Destination file path (extension overridden by *fmt*).
-    fmt:
-        One of ``'svg'``, ``'pdf'``, or ``'png'``.
-    transparent:
-        Transparent background (useful for PNG).
-
-    Returns
-    -------
-    Path
-        Resolved absolute path of the saved file.
+    SVG/PDF remain vector formats. PNG is exported at 600 dpi so fine lines
+    and text survive common journal production workflows.
     """
+    if fmt not in {"svg", "pdf", "png"}:
+        raise ValueError(f"Unsupported figure format: {fmt}")
+
     path = Path(output_path).with_suffix(f".{fmt}")
     path.parent.mkdir(parents=True, exist_ok=True)
-
-    save_kwargs: dict[str, object] = {
-        "format": fmt,
-        "dpi": 300,
-        "transparent": transparent,
-        "bbox_inches": "tight",
-        "metadata": _build_figure_metadata(fmt),
-    }
-
-    figure.savefig(path, **save_kwargs)
-    logger.info("Figure exported to '%s' (%s).", path, fmt.upper())
+    dpi = 600 if fmt == "png" else 300
+    figure.savefig(
+        path,
+        format=fmt,
+        dpi=dpi,
+        transparent=transparent,
+        bbox_inches="tight",
+        pad_inches=0.03,
+        facecolor="none" if transparent else "white",
+        metadata=_build_figure_metadata(fmt),
+    )
+    logger.info("Figure exported to '%s' (%s, dpi=%d).", path, fmt.upper(), dpi)
     return path.resolve()
 
 
-# ---------------------------------------------------------------------------
-# Private — Drawing Helpers
-# ---------------------------------------------------------------------------
-
-
-def _build_gradient_colours(n: int) -> list[str]:
-    cmap = matplotlib.colormaps.get_cmap("Blues")
-    sample_points = np.linspace(0.85, 0.30, n)
-    return [matplotlib.colors.to_hex(cmap(t)) for t in sample_points]
-
-
-def _annotate_bars(
-    ax: Axes, bars: matplotlib.container.BarContainer, values: np.ndarray
-) -> None:
+def _annotate_bars(ax: Axes, bars, values: np.ndarray) -> None:
     for bar, value in zip(bars, values):
-        x_pos = bar.get_width() + 0.005
-        y_pos = bar.get_y() + bar.get_height() / 2.0
-        ax.text(
-            x_pos, y_pos, f"{value:.4f}",
-            va="center", ha="left", fontsize=8, color=_GREY_TEXT,
-        )
-
-
-def _annotate_heatmap_cells(
-    ax: Axes,
-    data: np.ndarray,
-    fmt: str = ".3f",
-    fontsize: float = 8.0,
-) -> None:
-    n_rows, n_cols = data.shape
-    _DARK_THRESHOLD: float = 0.55
-    for row in range(n_rows):
-        for col in range(n_cols):
-            value = data[row, col]
-            is_dark = value >= _DARK_THRESHOLD
-            text_colour = "white" if is_dark else _GREY_TEXT
+        y = bar.get_y() + bar.get_height() / 2.0
+        if value >= 0.90:
             ax.text(
-                col, row, format(value, fmt),
-                ha="center", va="center", fontsize=fontsize,
-                color=text_colour,
-                fontweight="bold" if is_dark else "normal",
+                value - 0.012,
+                y,
+                f"{value:.3f}",
+                ha="right",
+                va="center",
+                fontsize=7.2,
+                color="white",
+            )
+        else:
+            ax.text(
+                value + 0.012,
+                y,
+                f"{value:.3f}",
+                ha="left",
+                va="center",
+                fontsize=7.2,
+                color=_TEXT,
+            )
+
+
+def _annotate_heatmap_cells(ax: Axes, data: np.ndarray, fontsize: float) -> None:
+    for row in range(data.shape[0]):
+        for col in range(data.shape[1]):
+            value = float(data[row, col])
+            colour = "white" if value < 0.35 or value > 0.82 else _TEXT
+            ax.text(
+                col,
+                row,
+                f"{value:.2f}",
+                ha="center",
+                va="center",
+                fontsize=fontsize,
+                color=colour,
             )
 
 
 def _draw_threshold_line(ax: Axes, threshold: float) -> None:
     ax.axvline(
-        x=threshold, color=_ORANGE, linestyle="--", linewidth=1.2,
-        alpha=0.85, label=f"Threshold = {threshold:.2f}", zorder=3,
+        threshold,
+        color=_ACCENT,
+        linestyle="--",
+        linewidth=1.0,
+        label=f"Threshold = {threshold:.2f}",
     )
-    ax.legend(frameon=False, fontsize=8, loc="lower right")
+    ax.legend(frameon=False, loc="lower right")
 
 
-def _polish_axes(ax: Axes) -> None:
-    ax.spines["left"].set_color(_SPINE_COLOUR)
-    ax.spines["bottom"].set_color(_SPINE_COLOUR)
-    ax.tick_params(axis="both", which="both", length=3, color=_SPINE_COLOUR)
-    ax.grid(axis="x", linestyle=":", linewidth=0.5, alpha=0.6, color=_SPINE_COLOUR)
+def _polish_cartesian_axes(ax: Axes, grid_axis: Literal["x", "y", "both"] = "both") -> None:
+    ax.spines["left"].set_color(_SPINE)
+    ax.spines["bottom"].set_color(_SPINE)
+    ax.tick_params(axis="both", which="both", color=_SPINE)
+    ax.grid(axis=grid_axis, color=_GRID, linewidth=0.55, linestyle="-", alpha=0.85)
+    ax.set_axisbelow(True)
 
 
-# ---------------------------------------------------------------------------
-# Private — Miscellaneous
-# ---------------------------------------------------------------------------
+def _network_linewidth(grg: float) -> float:
+    """Absolute GRG-to-linewidth mapping; intentionally not min-max re-scaled."""
+    clipped = float(np.clip(grg, 0.0, 1.0))
+    return 0.70 + 2.30 * clipped
+
+
+def _network_alpha(grg: float) -> float:
+    clipped = float(np.clip(grg, 0.0, 1.0))
+    return 0.35 + 0.55 * clipped
 
 
 def _pad_or_truncate(values: list[float], target_length: int) -> list[float]:
+    values = list(values)
     if len(values) >= target_length:
         return values[:target_length]
     return values + [0.0] * (target_length - len(values))
 
 
 def _format_column_label(name: str) -> str:
-    return name.replace("_", " ").strip()
+    return str(name).replace("_", " ").strip()
+
+
+def _wrap_label(name: str, width: int) -> str:
+    clean = _format_column_label(name)
+    return textwrap.fill(clean, width=width, break_long_words=False, break_on_hyphens=False)
 
 
 def _build_figure_metadata(fmt: ExportFormat) -> dict[str, str]:
-    base_meta: dict[str, str] = {
-        "Title": "GRA-MicroAnalyzer Output",
-        "Author": "GRA-MicroAnalyzer",
-        "Subject": "Grey Relational Analysis — Material Science",
-    }
     if fmt == "svg":
-        return base_meta
+        return {
+            "Title": "GRA-MicroAnalyzer figure",
+            "Description": "Grey relational analysis figure for materials research",
+            "Creator": "GRA-MicroAnalyzer",
+        }
     if fmt == "pdf":
-        return {**base_meta, "Creator": "Matplotlib via GRA-MicroAnalyzer"}
+        return {
+            "Title": "GRA-MicroAnalyzer figure",
+            "Author": "GRA-MicroAnalyzer",
+            "Subject": "Grey relational analysis for materials research",
+            "Creator": "Matplotlib via GRA-MicroAnalyzer",
+        }
     return {}
