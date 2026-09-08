@@ -2,7 +2,7 @@
 
 <div align="center">
 
-**Grey Relational Analysis for Microstructural Attribution**
+**Grey Relational Analysis for Microstructure–Property Association**
 *面向材料科学研究者的灰色关联分析桌面工具*
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
@@ -16,9 +16,11 @@
 
 ## 项目简介 | Overview
 
-**GRA-MicroAnalyzer** 是一款面向材料科学研究者的桌面应用程序，用于量化**宏观性能指标**（如抗拉应变、裂缝宽度、强度等）与**微观结构因素**（如结合水含量、孔隙特征、物相组成等）之间的关联强度。
+**GRA-MicroAnalyzer** 是一款面向材料科学研究者的桌面应用程序，用于量化**宏观性能指标**（如抗拉应变、裂缝宽度、强度等）与**微观结构因素**（如结合水含量、孔隙特征、物相组成等）之间的灰色关联强度。
 
 本工具基于灰色关联分析（Grey Relational Analysis, GRA），适合材料试验中常见的**小样本、指标多、信息不完备**场景，可将因素筛选从经验判断转化为可复现的数学计算流程。
+
+> **Scientific scope:** GRA measures similarity/association between sequence patterns. A high GRG does **not** by itself prove causality or physical mechanism. Mechanistic interpretation should be supported by experiments, theory, microscopy, spectroscopy, or other independent evidence.
 
 ---
 
@@ -82,15 +84,20 @@ graph TB
 ## 主要功能 | Features
 
 - CSV / Excel 数据导入。
-- 自动识别数值兼容列，减少误选文本列导致的计算失败。
+- 自动识别可靠数值列：默认要求至少 3 个有限数值，且有效率不低于 80%。
 - 参考序列与比较序列分别设置 LTB / STB 极性。
-- 自动处理缺失值与非数值内容。
-- 常量参考列报错，常量比较因素自动剔除。
+- **比较因素可逐项勾选**，避免所有数值列被强制纳入分析。
+- 自动处理缺失值、非数值内容以及 `+Inf/-Inf`。
+- 任一计算阶段若产生 NaN/Inf，立即停止而不是静默忽略。
+- 常量参考列报错，常量比较因素自动剔除并记录。
 - 输出 GRG 排名、归一化矩阵、Delta 矩阵、Xi 系数矩阵。
+- 并列 GRG 使用相同竞争名次（例如 1, 1, 3）。
+- Excel 导出包含 **Data Quality** 审计表：原始样本数、保留样本数、删除样本数、非数值转换、Inf 清洗、常量因素与警告。
 - 生成柱状图、热图、网络图、雷达图。
 - 大规模热图自动跳过渲染，避免 GUI 卡死，完整矩阵仍可导出 Excel。
 - 雷达图默认限制展示样本数量，避免图形不可读。
 - Excel、SVG、PDF、PNG 导出。
+- GitHub Actions 在 Python 3.10 / 3.12 自动运行测试。
 
 ---
 
@@ -138,7 +145,7 @@ python main.py
 pip install -r requirements-dev.txt
 ```
 
-运行核心引擎测试：
+运行测试：
 
 ```bash
 pytest
@@ -146,16 +153,22 @@ pytest
 
 测试覆盖内容包括：
 
-- 基础 GRA 排名。
-- 非数值数据清洗。
+- 手工计算与 GRA 系数/GRG 对照。
+- LTB / STB 归一化。
+- 非数值、缺失值、`+Inf/-Inf` 清洗。
 - 常量比较因素自动剔除。
 - 常量参考序列报错。
+- ρ 边界值（0.01 / 0.5 / 1.0）。
+- 缺失 ID 列。
+- 并列 GRG 排名。
+- 重复表头校验。
+- Excel Data Quality 审计表导出。
 
 ---
 
 ## 数据格式建议 | Input Format
 
-建议数据表第一行为列名，例如：
+建议数据表第一行为唯一列名，例如：
 
 | Sample | Tensile strain | Bound water | Porosity | Crack width |
 |---|---:|---:|---:|---:|
@@ -166,9 +179,11 @@ pytest
 
 - `Sample` 作为 ID 列。
 - `Tensile strain` 或其他宏观性能作为 Reference Column。
-- 微观结构指标作为 Comparative Factors。
+- 只勾选具有明确研究意义的微观结构指标作为 Comparative Factors。
 - 对“越大越好”的指标选择 LTB。
 - 对“越小越好”的指标选择 STB。
+- 如果 Data Quality 显示大量样本被删除，不应直接引用 GRG 排名，应先处理数据完整性问题。
+- 小于 5 个完整样本时软件会给出稳定性警告；结果仅建议用于探索性分析。
 
 ---
 

@@ -66,6 +66,10 @@ class GRAConfig(BaseModel):
             raise ValueError(
                 f"Reference column {self.reference_column!r} cannot also be comparative."
             )
+        if self.id_column == self.reference_column:
+            raise ValueError("ID column and reference column must be different.")
+        if self.id_column in self.comparative_columns:
+            raise ValueError("ID column cannot also be a comparative factor.")
         return self
 
     @property
@@ -81,6 +85,20 @@ class GRAConfig(BaseModel):
         )
 
 
+class DataQualityReport(BaseModel):
+    """Audit trail describing how input data changed before GRA computation."""
+
+    original_rows: int = 0
+    retained_rows: int = 0
+    dropped_rows: int = 0
+    conversion_failures: dict[str, int] = Field(default_factory=dict)
+    non_finite_values: dict[str, int] = Field(default_factory=dict)
+    dropped_constant_factors: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+    model_config = {"frozen": True}
+
+
 class GRAResult(BaseModel):
     config: GRAConfig
     normalised_df: pd.DataFrame
@@ -88,6 +106,7 @@ class GRAResult(BaseModel):
     coefficient_df: pd.DataFrame
     grg_series: pd.Series
     ranked_factors: list[str]
+    data_quality: DataQualityReport = Field(default_factory=DataQualityReport)
 
     model_config = {
         "frozen": True,
@@ -108,13 +127,30 @@ class GRAResult(BaseModel):
     def n_factors(self) -> int:
         return len(self.ranked_factors)
 
+    @property
+    def rank_by_factor(self) -> dict[str, int]:
+        """Competition ranks; tied GRG values receive the same rank."""
+        ranks = self.grg_series.rank(method="min", ascending=False)
+        return {str(name): int(rank) for name, rank in ranks.items()}
+
     def summary_string(self) -> str:
         lines = [
             f"GRA Result — {self.n_samples} samples, "
             f"{self.n_factors} factors (ρ = {self.config.rho})",
             "-" * 50,
         ]
-        for rank, name in enumerate(self.ranked_factors, start=1):
+        ranks = self.rank_by_factor
+        for name in self.ranked_factors:
             grade = float(self.grg_series[name])
-            lines.append(f"  #{rank:>2}  {name:<35} GRG = {grade:.4f}")
+            lines.append(f"  #{ranks[name]:>2}  {name:<35} GRG = {grade:.4f}")
+
+        if self.data_quality.original_rows:
+            lines.extend(
+                [
+                    "-" * 50,
+                    "Data quality: "
+                    f"{self.data_quality.retained_rows}/{self.data_quality.original_rows} "
+                    "rows retained",
+                ]
+            )
         return "\n".join(lines)

@@ -15,6 +15,7 @@ from PySide6.QtCore import Qt, QElapsedTimer, QTimer, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QCheckBox,
     QComboBox,
     QFileDialog,
     QGroupBox,
@@ -31,7 +32,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from core.data_model import GRAConfig, ColumnConfig, Polarity
+from core.data_model import ColumnConfig, GRAConfig, Polarity
 from utils.file_io import load_dataset
 
 logger = logging.getLogger(__name__)
@@ -40,6 +41,8 @@ _RHO_SCALE = 100
 _RHO_DEFAULT = 0.5
 _RHO_MIN = 0.01
 _RHO_MAX = 1.00
+_MIN_NUMERIC_VALID_COUNT = 3
+_MIN_NUMERIC_VALID_RATIO = 0.80
 
 _POLARITY_OPTIONS: list[tuple[str, Polarity]] = [
     ("Larger is Better (+)", Polarity.LTB),
@@ -74,6 +77,7 @@ class ConfigPanel(QWidget):
         self._dataframe: Optional[pd.DataFrame] = None
         self._file_path: Optional[Path] = None
         self._numeric_columns: list[str] = []
+        self._numeric_quality: dict[str, tuple[int, int, float]] = {}
         self._run_timer = QElapsedTimer()
         self._dot_timer = QTimer(self)
         self._dot_count = 0
@@ -102,7 +106,7 @@ class ConfigPanel(QWidget):
         self._btn_load.setMinimumHeight(30)
         self._btn_load.setToolTip(
             "Open a CSV (.csv) or Excel (.xlsx / .xls) file.\n"
-            "The first row must contain column headers."
+            "The first row must contain unique column headers."
         )
         layout.addWidget(self._btn_load)
 
@@ -138,20 +142,41 @@ class ConfigPanel(QWidget):
         return group
 
     def _build_polarity_group(self) -> QGroupBox:
-        group = QGroupBox("Comparative Factor Polarities")
+        group = QGroupBox("Comparative Factors")
         group.setStyleSheet(_GROUP_STYLE)
         layout = QVBoxLayout(group)
         layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(0)
+        layout.setSpacing(5)
 
-        self._tbl_polarity = QTableWidget(0, 2)
-        self._tbl_polarity.setHorizontalHeaderLabels(["Factor", "Polarity"])
+        hint = QLabel(
+            "Only checked factors are included in GRA. Numeric-compatible columns "
+            "must have at least 80% finite numeric values and at least 3 valid values."
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: #5F6B76; font-size: 8pt;")
+        layout.addWidget(hint)
+
+        button_row = QHBoxLayout()
+        self._btn_select_all = QPushButton("Select all")
+        self._btn_clear_all = QPushButton("Clear all")
+        self._btn_select_all.setFixedHeight(24)
+        self._btn_clear_all.setFixedHeight(24)
+        button_row.addWidget(self._btn_select_all)
+        button_row.addWidget(self._btn_clear_all)
+        button_row.addStretch()
+        layout.addLayout(button_row)
+
+        self._tbl_polarity = QTableWidget(0, 3)
+        self._tbl_polarity.setHorizontalHeaderLabels(["Use", "Factor", "Polarity"])
         self._tbl_polarity.horizontalHeader().setStretchLastSection(False)
         self._tbl_polarity.horizontalHeader().setSectionResizeMode(
-            0, self._tbl_polarity.horizontalHeader().ResizeMode.Stretch
+            0, self._tbl_polarity.horizontalHeader().ResizeMode.ResizeToContents
         )
         self._tbl_polarity.horizontalHeader().setSectionResizeMode(
-            1, self._tbl_polarity.horizontalHeader().ResizeMode.ResizeToContents
+            1, self._tbl_polarity.horizontalHeader().ResizeMode.Stretch
+        )
+        self._tbl_polarity.horizontalHeader().setSectionResizeMode(
+            2, self._tbl_polarity.horizontalHeader().ResizeMode.ResizeToContents
         )
         self._tbl_polarity.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self._tbl_polarity.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
@@ -163,8 +188,8 @@ class ConfigPanel(QWidget):
         scroll = QScrollArea()
         scroll.setWidget(self._tbl_polarity)
         scroll.setWidgetResizable(True)
-        scroll.setMinimumHeight(140)
-        scroll.setMaximumHeight(260)
+        scroll.setMinimumHeight(150)
+        scroll.setMaximumHeight(280)
         layout.addWidget(scroll)
         return group
 
@@ -213,6 +238,8 @@ class ConfigPanel(QWidget):
     def _connect_internal_signals(self) -> None:
         self._btn_load.clicked.connect(self._on_load_clicked)
         self._btn_run.clicked.connect(self._on_run_clicked)
+        self._btn_select_all.clicked.connect(lambda: self._set_all_factor_checks(True))
+        self._btn_clear_all.clicked.connect(lambda: self._set_all_factor_checks(False))
         self._slider_rho.valueChanged.connect(self._on_rho_changed)
         self._cmb_ref_column.currentIndexChanged.connect(self._refresh_polarity_table)
         self._cmb_id_column.currentIndexChanged.connect(self._refresh_polarity_table)
@@ -244,9 +271,13 @@ class ConfigPanel(QWidget):
         self._lbl_file.setStyleSheet("color: #1A6B2A; font-style: normal; font-size: 8pt; font-weight: bold;")
         self._populate_column_combos(df)
         self._refresh_polarity_table()
-        self._btn_run.setEnabled(True)
+        self._btn_run.setEnabled(bool(self._numeric_columns))
 
-        numeric_note = f" {len(self._numeric_columns)} numeric-compatible column(s) detected."
+        numeric_note = (
+            f" {len(self._numeric_columns)} reliable numeric-compatible column(s) detected."
+        )
+        if not self._numeric_columns:
+            numeric_note += " No column meets the numeric quality threshold."
         self.status_message.emit(
             f"Loaded '{file_path.name}' - {len(df):,} rows x {len(df.columns)} columns.{numeric_note}"
         )
@@ -255,15 +286,28 @@ class ConfigPanel(QWidget):
 
     def _detect_numeric_columns(self, df: pd.DataFrame) -> list[str]:
         numeric_columns: list[str] = []
+        self._numeric_quality = {}
+        total_rows = len(df)
+
         for col in df.columns:
-            converted = pd.to_numeric(df[col], errors="coerce")
-            if converted.notna().sum() >= 2:
+            converted = pd.to_numeric(df[col], errors="coerce").replace(
+                [float("inf"), float("-inf")], pd.NA
+            )
+            valid_count = int(converted.notna().sum())
+            valid_ratio = valid_count / total_rows if total_rows else 0.0
+            self._numeric_quality[col] = (valid_count, total_rows, valid_ratio)
+
+            if (
+                valid_count >= _MIN_NUMERIC_VALID_COUNT
+                and valid_ratio >= _MIN_NUMERIC_VALID_RATIO
+            ):
                 numeric_columns.append(col)
+
         return numeric_columns
 
     def _populate_column_combos(self, df: pd.DataFrame) -> None:
         all_columns = list(df.columns)
-        numeric_columns = self._numeric_columns or all_columns
+        numeric_columns = self._numeric_columns
 
         self._cmb_id_column.blockSignals(True)
         self._cmb_id_column.clear()
@@ -278,28 +322,48 @@ class ConfigPanel(QWidget):
         if all_columns:
             self._cmb_id_column.setCurrentIndex(0)
         if numeric_columns:
-            preferred_ref_idx = 1 if len(numeric_columns) > 1 else 0
-            self._cmb_ref_column.setCurrentIndex(preferred_ref_idx)
+            self._cmb_ref_column.setCurrentIndex(0)
 
     def _refresh_polarity_table(self) -> None:
         if self._dataframe is None:
             return
         id_col = self._cmb_id_column.currentText()
         ref_col = self._cmb_ref_column.currentText()
-        source_cols = self._numeric_columns or list(self._dataframe.columns)
-        comparative_cols = [col for col in source_cols if col not in (id_col, ref_col)]
+        comparative_cols = [
+            col for col in self._numeric_columns if col not in (id_col, ref_col)
+        ]
 
         self._tbl_polarity.setRowCount(0)
         for row_idx, col_name in enumerate(comparative_cols):
             self._tbl_polarity.insertRow(row_idx)
+
+            check = QCheckBox()
+            check.setChecked(True)
+            check.setToolTip("Include this factor in the GRA computation.")
+            self._tbl_polarity.setCellWidget(row_idx, 0, check)
+
+            valid_count, total_rows, valid_ratio = self._numeric_quality.get(
+                col_name, (0, len(self._dataframe), 0.0)
+            )
             name_item = QTableWidgetItem(col_name)
-            name_item.setToolTip(col_name)
-            self._tbl_polarity.setItem(row_idx, 0, name_item)
+            name_item.setToolTip(
+                f"{col_name}\nFinite numeric values: {valid_count}/{total_rows} "
+                f"({valid_ratio:.1%})"
+            )
+            self._tbl_polarity.setItem(row_idx, 1, name_item)
+
             cmb = QComboBox()
             for label, _ in _POLARITY_OPTIONS:
                 cmb.addItem(label)
-            self._tbl_polarity.setCellWidget(row_idx, 1, cmb)
+            self._tbl_polarity.setCellWidget(row_idx, 2, cmb)
+
         self._tbl_polarity.resizeRowsToContents()
+
+    def _set_all_factor_checks(self, checked: bool) -> None:
+        for row in range(self._tbl_polarity.rowCount()):
+            widget = self._tbl_polarity.cellWidget(row, 0)
+            if isinstance(widget, QCheckBox):
+                widget.setChecked(checked)
 
     def _on_rho_changed(self, int_value: int) -> None:
         rho = int_value / _RHO_SCALE
@@ -319,7 +383,11 @@ class ConfigPanel(QWidget):
         id_col = self._cmb_id_column.currentText()
         ref_col = self._cmb_ref_column.currentText()
         if not ref_col:
-            QMessageBox.warning(self, "Configuration Error", "Select a numeric-compatible reference column.")
+            QMessageBox.warning(
+                self,
+                "Configuration Error",
+                "Select a reliable numeric-compatible reference column.",
+            )
             return None
 
         ref_polarity_idx = self._cmb_ref_polarity.currentIndex()
@@ -328,19 +396,37 @@ class ConfigPanel(QWidget):
 
         comparative_columns: dict[str, ColumnConfig] = {}
         for row in range(self._tbl_polarity.rowCount()):
-            item = self._tbl_polarity.item(row, 0)
-            cmb = self._tbl_polarity.cellWidget(row, 1)
-            if item is None or not isinstance(cmb, QComboBox):
+            check = self._tbl_polarity.cellWidget(row, 0)
+            item = self._tbl_polarity.item(row, 1)
+            cmb = self._tbl_polarity.cellWidget(row, 2)
+            if (
+                not isinstance(check, QCheckBox)
+                or not check.isChecked()
+                or item is None
+                or not isinstance(cmb, QComboBox)
+            ):
                 continue
+
             factor_name = item.text()
             _, polarity = _POLARITY_OPTIONS[cmb.currentIndex()]
-            comparative_columns[factor_name] = ColumnConfig(name=factor_name, polarity=polarity)
+            comparative_columns[factor_name] = ColumnConfig(
+                name=factor_name,
+                polarity=polarity,
+            )
 
         if not comparative_columns:
-            QMessageBox.warning(self, "Configuration Error", "At least one numeric comparative factor is required.")
+            QMessageBox.warning(
+                self,
+                "Configuration Error",
+                "Select at least one comparative factor using the checkboxes.",
+            )
             return None
         if ref_col == id_col:
-            QMessageBox.warning(self, "Configuration Error", "Reference column and ID column must be different.")
+            QMessageBox.warning(
+                self,
+                "Configuration Error",
+                "Reference column and ID column must be different.",
+            )
             return None
 
         try:
@@ -361,7 +447,7 @@ class ConfigPanel(QWidget):
 
     def set_running_state(self, running: bool) -> None:
         """Toggle the animated computing state of the Run button."""
-        self._btn_run.setEnabled(not running)
+        self._btn_run.setEnabled(not running and bool(self._numeric_columns))
         if running:
             self._dot_count = 0
             self._dot_timer.start(400)

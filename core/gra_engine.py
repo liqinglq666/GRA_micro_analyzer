@@ -14,7 +14,7 @@ from typing import Final
 import numpy as np
 import pandas as pd
 
-from core.data_model import GRAConfig, GRAResult, Polarity
+from core.data_model import DataQualityReport, GRAConfig, GRAResult, Polarity
 from core.exceptions import (
     ColumnNotFoundError,
     ComputationError,
@@ -26,6 +26,7 @@ from core.exceptions import (
 logger = logging.getLogger(__name__)
 
 _MINIMUM_SAMPLES: Final[int] = 2
+_SMALL_SAMPLE_WARNING: Final[int] = 5
 _EPSILON: Final[float] = 1e-12
 
 
@@ -41,11 +42,22 @@ class GreyRelationalAnalyzer:
             config.rho,
         )
 
-        clean_df, effective_config = self._stage_validate_and_clean(dataframe, config)
+        clean_df, effective_config, data_quality = self._stage_validate_and_clean(
+            dataframe, config
+        )
         normalised_df = self._stage_normalise(clean_df, effective_config)
+        self._assert_finite_frame(normalised_df, stage="normalisation")
+
         delta_df = self._stage_compute_deltas(normalised_df, effective_config)
-        coefficient_df = self._stage_compute_coefficients(delta_df, effective_config.rho)
+        self._assert_finite_frame(delta_df, stage="absolute_difference")
+
+        coefficient_df = self._stage_compute_coefficients(
+            delta_df, effective_config.rho
+        )
+        self._assert_finite_frame(coefficient_df, stage="relational_coefficient")
+
         grg_series = self._stage_compute_grades(coefficient_df)
+        self._assert_finite_series(grg_series, stage="grading")
         ranked_factors = self._stage_rank_factors(grg_series)
 
         result = GRAResult(
@@ -55,6 +67,7 @@ class GreyRelationalAnalyzer:
             coefficient_df=coefficient_df,
             grg_series=grg_series,
             ranked_factors=ranked_factors,
+            data_quality=data_quality,
         )
         logger.info("GRA run complete. Top factor: '%s'", result.top_factor)
         return result
@@ -65,12 +78,14 @@ class GreyRelationalAnalyzer:
 
     def _stage_validate_and_clean(
         self, dataframe: pd.DataFrame, config: GRAConfig
-    ) -> tuple[pd.DataFrame, GRAConfig]:
+    ) -> tuple[pd.DataFrame, GRAConfig, DataQualityReport]:
         """
-        Validate columns, coerce numerical data, drop invalid rows, remove
-        constant comparative factors, and enforce the minimum sample count.
+        Validate columns, coerce numerical data, convert +/-Inf to NaN,
+        drop invalid rows, remove constant comparative factors, and enforce
+        the minimum sample count. Returns a data-quality audit trail.
         """
         required_columns: list[str] = [
+            config.id_column,
             config.reference_column,
             *config.comparative_column_names,
         ]
@@ -78,19 +93,33 @@ class GreyRelationalAnalyzer:
         self._assert_columns_exist(dataframe, required_columns)
         self._assert_polarity_completeness(config)
 
-        all_columns = [config.id_column] + required_columns
-        unique_columns = list(dict.fromkeys(all_columns))
+        unique_columns = list(dict.fromkeys(required_columns))
         subset = dataframe[unique_columns].copy()
-        numeric_columns = [config.reference_column] + config.comparative_column_names
+        numeric_columns = [
+            config.reference_column,
+            *config.comparative_column_names,
+        ]
 
+        original_rows = len(subset)
         conversion_failures: dict[str, int] = {}
+        non_finite_values: dict[str, int] = {}
+
         for col in numeric_columns:
-            original_non_empty = subset[col].notna() & (subset[col].astype(str).str.strip() != "")
+            original_non_empty = subset[col].notna() & (
+                subset[col].astype(str).str.strip() != ""
+            )
             coerced = pd.to_numeric(subset[col], errors="coerce")
+
             failed = int((original_non_empty & coerced.isna()).sum())
             if failed:
                 conversion_failures[col] = failed
-            subset[col] = coerced
+
+            numeric_array = coerced.to_numpy(dtype=float, na_value=np.nan)
+            inf_count = int(np.isinf(numeric_array).sum())
+            if inf_count:
+                non_finite_values[col] = inf_count
+
+            subset[col] = coerced.replace([np.inf, -np.inf], np.nan)
 
         if conversion_failures:
             detail = "; ".join(
@@ -98,13 +127,19 @@ class GreyRelationalAnalyzer:
             )
             logger.warning("Non-numeric values coerced to NaN before GRA: %s", detail)
 
-        subset_before = len(subset)
+        if non_finite_values:
+            detail = "; ".join(
+                f"{col}: {count} value(s)" for col, count in non_finite_values.items()
+            )
+            logger.warning("Infinite values converted to NaN before GRA: %s", detail)
+
         subset = subset.dropna(subset=numeric_columns)
-        dropped = subset_before - len(subset)
-        if dropped > 0:
+        dropped_rows = original_rows - len(subset)
+        if dropped_rows > 0:
             logger.warning(
-                "%d row(s) dropped due to missing or non-numeric values in analysis columns.",
-                dropped,
+                "%d row(s) dropped due to missing, non-numeric, or non-finite "
+                "values in analysis columns.",
+                dropped_rows,
             )
 
         if len(subset) < _MINIMUM_SAMPLES:
@@ -113,17 +148,43 @@ class GreyRelationalAnalyzer:
                 minimum_required=_MINIMUM_SAMPLES,
             )
 
+        warnings: list[str] = []
+        if len(subset) < _SMALL_SAMPLE_WARNING:
+            warning = (
+                f"Only {len(subset)} complete samples remain after cleaning. "
+                "GRA can be computed, but the ranking may be unstable; interpret "
+                "the result cautiously."
+            )
+            logger.warning(warning)
+            warnings.append(warning)
+
         self._assert_reference_not_constant(subset, config.reference_column)
         effective_config = self._drop_constant_comparative_factors(subset, config)
+        dropped_constant_factors = [
+            name
+            for name in config.comparative_column_names
+            if name not in effective_config.comparative_columns
+        ]
 
-        kept_columns = [config.id_column, effective_config.reference_column, *effective_config.comparative_column_names]
-        kept_columns = list(dict.fromkeys([c for c in kept_columns if c in subset.columns]))
+        kept_columns = [
+            config.id_column,
+            effective_config.reference_column,
+            *effective_config.comparative_column_names,
+        ]
+        kept_columns = list(dict.fromkeys(kept_columns))
         subset = subset[kept_columns]
+        subset = subset.set_index(config.id_column)
 
-        if config.id_column in subset.columns:
-            subset = subset.set_index(config.id_column)
-
-        return subset, effective_config
+        data_quality = DataQualityReport(
+            original_rows=original_rows,
+            retained_rows=len(subset),
+            dropped_rows=dropped_rows,
+            conversion_failures=conversion_failures,
+            non_finite_values=non_finite_values,
+            dropped_constant_factors=dropped_constant_factors,
+            warnings=warnings,
+        )
+        return subset, effective_config, data_quality
 
     # ------------------------------------------------------------------
     # Stage 2 — Polarity-Aware Normalisation
@@ -165,7 +226,14 @@ class GreyRelationalAnalyzer:
         polarity: Polarity,
         column_name: str,
     ) -> pd.Series:
-        """Normalise a single Series according to its polarity."""
+        """Normalise a single finite Series according to its polarity."""
+        values = series.to_numpy(dtype=float)
+        if not np.isfinite(values).all():
+            raise NormalizationError(
+                column_name=column_name,
+                constant_value=float("nan"),
+            )
+
         col_min: float = float(series.min())
         col_max: float = float(series.max())
         col_range: float = col_max - col_min
@@ -196,7 +264,9 @@ class GreyRelationalAnalyzer:
             comp_normalised: pd.DataFrame = normalised_df[
                 config.comparative_column_names
             ]
-            delta_df: pd.DataFrame = comp_normalised.sub(ref_normalised, axis=0).abs()
+            delta_df: pd.DataFrame = comp_normalised.sub(
+                ref_normalised, axis=0
+            ).abs()
         except Exception as exc:
             raise ComputationError(
                 stage="absolute_difference",
@@ -222,13 +292,16 @@ class GreyRelationalAnalyzer:
             delta_min: float = float(delta_df.min().min())
             delta_max: float = float(delta_df.max().max())
 
+            if not np.isfinite(delta_min) or not np.isfinite(delta_max):
+                raise ValueError("Delta extrema are not finite.")
+
             if np.isclose(delta_max, 0.0, atol=_EPSILON):
                 logger.warning(
                     "Global Δ_max ≈ 0; all retained sequences are identical to "
                     "the reference. Coefficients set to 1.0."
                 )
                 return pd.DataFrame(
-                    np.ones_like(delta_df.values),
+                    np.ones_like(delta_df.values, dtype=float),
                     index=delta_df.index,
                     columns=delta_df.columns,
                 )
@@ -256,9 +329,9 @@ class GreyRelationalAnalyzer:
     def _stage_compute_grades(
         self, coefficient_df: pd.DataFrame
     ) -> pd.Series:
-        """Compute GRG for each comparative factor."""
+        """Compute GRG for each comparative factor without skipping NaN."""
         try:
-            grg_series: pd.Series = coefficient_df.mean(axis=0)
+            grg_series: pd.Series = coefficient_df.mean(axis=0, skipna=False)
         except Exception as exc:
             raise ComputationError(
                 stage="grading",
@@ -277,8 +350,10 @@ class GreyRelationalAnalyzer:
     # ------------------------------------------------------------------
 
     def _stage_rank_factors(self, grg_series: pd.Series) -> list[str]:
-        """Sort comparative factors by GRG in descending order."""
-        ranked: pd.Series = grg_series.sort_values(ascending=False)
+        """Sort comparative factors by GRG in descending, stable order."""
+        ranked: pd.Series = grg_series.sort_values(
+            ascending=False, kind="mergesort"
+        )
         return list(ranked.index)
 
     # ------------------------------------------------------------------
@@ -307,7 +382,9 @@ class GreyRelationalAnalyzer:
         if missing:
             raise PolarityConfigError(missing_columns=missing)
 
-    def _assert_reference_not_constant(self, dataframe: pd.DataFrame, reference_column: str) -> None:
+    def _assert_reference_not_constant(
+        self, dataframe: pd.DataFrame, reference_column: str
+    ) -> None:
         """Reference sequence must contain discriminatory information."""
         ref_series = dataframe[reference_column]
         ref_min = float(ref_series.min())
@@ -322,7 +399,7 @@ class GreyRelationalAnalyzer:
         self, dataframe: pd.DataFrame, config: GRAConfig
     ) -> GRAConfig:
         """Drop constant comparative factors instead of failing the whole run."""
-        retained = {}
+        retained: dict[str, object] = {}
         dropped: list[str] = []
 
         for name, cfg in config.comparative_columns.items():
@@ -353,6 +430,37 @@ class GreyRelationalAnalyzer:
             id_column=config.id_column,
             reference_column=config.reference_column,
             reference_polarity=config.reference_polarity,
-            comparative_columns=retained,
+            comparative_columns=retained,  # type: ignore[arg-type]
             rho=config.rho,
         )
+
+    def _assert_finite_frame(self, dataframe: pd.DataFrame, stage: str) -> None:
+        """Reject any NaN/+Inf/-Inf produced inside a computation stage."""
+        try:
+            values = dataframe.to_numpy(dtype=float)
+            is_finite = np.isfinite(values)
+        except Exception as exc:
+            raise ComputationError(stage=stage, detail=str(exc)) from exc
+
+        if not is_finite.all():
+            bad_count = int((~is_finite).sum())
+            raise ComputationError(
+                stage=stage,
+                detail=(
+                    f"{bad_count} non-finite value(s) were produced. "
+                    "Computation stopped to avoid silently biased GRG values."
+                ),
+            )
+
+    def _assert_finite_series(self, series: pd.Series, stage: str) -> None:
+        """Reject non-finite values in a computed result Series."""
+        values = series.to_numpy(dtype=float)
+        if not np.isfinite(values).all():
+            bad_count = int((~np.isfinite(values)).sum())
+            raise ComputationError(
+                stage=stage,
+                detail=(
+                    f"{bad_count} non-finite result value(s) were produced. "
+                    "Computation stopped rather than returning partial GRG values."
+                ),
+            )
