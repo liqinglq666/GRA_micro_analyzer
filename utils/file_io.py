@@ -58,7 +58,8 @@ def load_dataframe(file_path) -> "pd.DataFrame":
 def load_dataset(file_path) -> "pd.DataFrame":
     """
     Extended version of load_dataframe.
-    Strips fully-empty rows/columns after loading and normalises headers.
+    Strips fully-empty rows/columns, normalises headers, and rejects duplicate
+    or blank headers before they can make column selection ambiguous.
     """
     df = load_dataframe(file_path)
     df = df.dropna(how="all").dropna(axis=1, how="all")
@@ -69,6 +70,22 @@ def load_dataset(file_path) -> "pd.DataFrame":
         raise ValueError("The selected file contains no usable tabular data.")
     if len(df.columns) < 2:
         raise ValueError("At least two columns are required: one ID/target column and one factor column.")
+
+    blank_headers = [str(col) for col in df.columns if not str(col).strip()]
+    if blank_headers:
+        raise ValueError(
+            "One or more columns have blank headers. Please give every column "
+            "a unique name before analysis."
+        )
+
+    duplicate_mask = df.columns.duplicated(keep=False)
+    if duplicate_mask.any():
+        duplicates = list(dict.fromkeys(df.columns[duplicate_mask].tolist()))
+        duplicate_text = ", ".join(repr(name) for name in duplicates)
+        raise ValueError(
+            "Duplicate column headers were detected after whitespace trimming: "
+            f"{duplicate_text}. Rename them before analysis to avoid ambiguous results."
+        )
 
     return df
 
@@ -86,12 +103,13 @@ def save_results_to_excel(result: "GRAResult", output_path) -> Path:
         out = out.with_suffix(".xlsx")
     out.parent.mkdir(parents=True, exist_ok=True)
 
-    grg_series = result.grg_series.sort_values(ascending=False)
+    grg_series = result.grg_series.sort_values(ascending=False, kind="mergesort")
+    tied_ranks = grg_series.rank(method="min", ascending=False).astype(int)
     grg_df = pd.DataFrame({
-        "Rank":                  range(1, len(grg_series) + 1),
-        "Factor":                grg_series.index.tolist(),
+        "Rank": tied_ranks.values,
+        "Factor": grg_series.index.tolist(),
         "Grey Relational Grade": grg_series.values.round(6),
-        "Percentile (%)":        (grg_series.rank(pct=True) * 100).round(1).values,
+        "Percentile (%)": (grg_series.rank(pct=True) * 100).round(1).values,
     })
 
     norm_df = result.normalised_df.copy().round(6)
@@ -102,9 +120,9 @@ def save_results_to_excel(result: "GRAResult", output_path) -> Path:
     comp_cols = cfg.comparative_columns
     config_rows = [
         ("Reference Column (Target)", cfg.reference_column),
-        ("Reference Polarity",        cfg.reference_polarity.label),
-        ("Distinguishing Coeff. ρ",   cfg.rho),
-        ("Sample ID Column",          cfg.id_column if cfg.id_column else "— (none)"),
+        ("Reference Polarity", cfg.reference_polarity.label),
+        ("Distinguishing Coeff. ρ", cfg.rho),
+        ("Sample ID Column", cfg.id_column if cfg.id_column else "— (none)"),
         ("Number of Comparative Factors", len(comp_cols)),
         ("", ""),
         ("Comparative Factors", "Polarity"),
@@ -113,12 +131,54 @@ def save_results_to_excel(result: "GRAResult", output_path) -> Path:
         config_rows.append((col_name, col_cfg.polarity.label))
     config_df = pd.DataFrame(config_rows, columns=["Parameter", "Value"])
 
+    quality = result.data_quality
+    quality_rows: list[tuple[str, object]] = [
+        ("Original rows", quality.original_rows),
+        ("Retained rows", quality.retained_rows),
+        ("Dropped rows", quality.dropped_rows),
+        ("Retention rate (%)", round(100 * quality.retained_rows / quality.original_rows, 2) if quality.original_rows else "—"),
+        ("", ""),
+        ("Non-numeric conversions", ""),
+    ]
+    if quality.conversion_failures:
+        quality_rows.extend(
+            (column, count) for column, count in quality.conversion_failures.items()
+        )
+    else:
+        quality_rows.append(("None", 0))
+
+    quality_rows.extend([("", ""), ("Infinite values converted to missing", "")])
+    if quality.non_finite_values:
+        quality_rows.extend(
+            (column, count) for column, count in quality.non_finite_values.items()
+        )
+    else:
+        quality_rows.append(("None", 0))
+
+    quality_rows.extend(
+        [
+            ("", ""),
+            (
+                "Dropped constant factors",
+                ", ".join(quality.dropped_constant_factors)
+                if quality.dropped_constant_factors
+                else "None",
+            ),
+            (
+                "Warnings",
+                " | ".join(quality.warnings) if quality.warnings else "None",
+            ),
+        ]
+    )
+    quality_df = pd.DataFrame(quality_rows, columns=["Data Quality Item", "Value"])
+
     sheets = {
-        "GRG Ranking":           (grg_df,    False),
-        "Normalised Sequences":  (norm_df,   True),
-        "Delta Matrix":          (delta_df,  True),
-        "Xi Coefficient Matrix": (coeff_df,  True),
-        "Analysis Config":       (config_df, False),
+        "GRG Ranking": (grg_df, False),
+        "Normalised Sequences": (norm_df, True),
+        "Delta Matrix": (delta_df, True),
+        "Xi Coefficient Matrix": (coeff_df, True),
+        "Analysis Config": (config_df, False),
+        "Data Quality": (quality_df, False),
     }
 
     with pd.ExcelWriter(out, engine="openpyxl") as writer:
